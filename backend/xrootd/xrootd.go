@@ -95,9 +95,11 @@ type Fs struct {
 type Object struct {
 	fs      *Fs           // what this object is part of
 	remote  string       // The remote path
+  hasMetaData bool      // whether info below has been set
 	size    int64       // size of the object
 	modTime time.Time   // modification time of the object if known
-  mode         os.FileMode
+  mode    os.FileMode
+  sha1        string    // SHA-1 of the object content
 
 	//mode    os.FileMode // mode bits from the file
   //	md5sum  *string     // Cached MD5 checksum
@@ -223,7 +225,8 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 //  if err != nil {
 //  	return fmt.Errorf("could not create client: %w", err)
 //  }
-  fmt.Printf("226. f.root= %q \n",f.root)
+fmt.Printf("  Newfs: 234. f.root= %q \n",f.root)
+  f.root= path + f.root
   if f.root ==""{
     f.root = path
   }
@@ -231,7 +234,7 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
     f.root = url
 
   }*/
-  fmt.Printf("234. f.root= %q \n",f.root)
+  fmt.Printf("  Newfs: 234. f.root= %q \n",f.root)
   //return NewFsWithConnection(ctx, name, root, m, opt)
   return f, nil
 }
@@ -250,23 +253,58 @@ func (f *Fs) Features() *fs.Features {
 	return f.features
 }
 
-// A revoir?
+
+// Hashes returns the supported hash sets.
 func (f *Fs) Hashes() hash.Set {
-	return hash.Supported()
+	return hash.Set(hash.SHA1)
+  //return hash.Supported()
 }
 
 
 
 
-// NewObject creates a new remote sftp file object
+/*
+// Return an Object from a path
+//
+// If it can't be found it returns the error fs.ErrorObjectNotFound.
+func (f *Fs) newObjectWithInfo(ctx context.Context, remote string, info *api.Item) (fs.Object, error) {
+  o := &Object{
+		fs:     f,
+		remote: remote,
+	}
+	var err error
+	if info != nil {
+		// Set info
+		err = o.setMetaData(info)
+	} else {
+		err = o.readMetaData(ctx) // reads info and meta, returning an error
+	}
+	if err != nil {
+		return nil, err
+	}
+	return o, nil
+}*/
 
+
+
+
+
+
+
+
+// NewObject finds the Object at remote.  If it can't be found
+// it returns the error fs.ErrorObjectNotFound.
 func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
-	return nil, nil
+	o := &Object{
+		fs:     f,
+		remote: remote,
+	}
+	err := o.stat()
+	if err != nil {
+		return nil, err
+	}
+	return o, nil
 }
-
-
-
-
 
 
 
@@ -283,7 +321,7 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, fi 
 	if recursive {
 		end = ":"
 	}*/
-  fmt.Printf("Utilisation display")
+  fmt.Printf("Utilisation display \n")
 	dir := path.Join(root, fi.Name())
 	//fmt.Printf("%s%s\n", dir, end)
 /*
@@ -302,7 +340,6 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, fi 
 
 	for _, e := range ents {
     remote := path.Join(root, e.Name())
-
     if e.IsDir() {
 			d := fs.NewDir(remote, e.ModTime())
 			entries = append(entries, d)
@@ -314,7 +351,7 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, fi 
 			o.setMetadata(fi)
 			entries = append(entries, o)
 		}
-
+    fmt.Println("entries = ", entries)
     //format(o, dir, e, long)
 	}
 //	o.Flush()
@@ -331,7 +368,7 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, fi 
 			}
 		}
 	}*/
-
+  fmt.Printf("entries  type = %T \n ", entries)
 	return entries,nil
 }
 
@@ -349,13 +386,13 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 
   fmt.Printf("utilisation de list avec le chemin %q & url=%q \n", dir,f.url)
   if dir == "" {
-    //dir = "."
-		dir = "/back2"  //test
+    dir = "/."
+		//dir = "/back2"  //test
 	}
-//  xrddir := path.Join( f.url, dir)
-  xrddir :=  f.url + dir  //test
+  xrddir :=  f.root + dir
+  //xrddir :=  f.url + dir  //test
 
-  fmt.Printf("xrddir= %q \n",xrddir)
+  fmt.Printf("List xrddir= %q \n",xrddir) //a retirer
   //fi,urlpath,fsx,err := f.connectxrootclient(dir, ctx)
   client,path,err :=f.xrdremote(xrddir,ctx)
   if path == "" {
@@ -374,7 +411,10 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
   if err != nil {
 		return nil, fs.ErrorDirNotFound  //errors.Wrap(err," could not stat" + url.Path )
 	}
-  return f.display(ctx, fsx, path, fi /*, false, false*/)
+  entries,err = f.display(ctx, fsx, path, fi /*, false, false*/)
+  fmt.Printf("entries  type = %T \n ", entries)
+
+  return entries,err
 }
 
 
@@ -416,6 +456,119 @@ func (f *Fs) String() string {
 
 
 
+// readMetaDataForPath reads the metadata from the path
+/*
+func (f *Fs) readMetaDataForPath(ctx context.Context, path string) (info *api.Item, err error) {
+	// defer fs.Trace(f, "path=%q", path)("info=%+v, err=%v", &info, &err)
+	leaf, directoryID, err := f.dirCache.FindRootAndPath(ctx, path, false)
+	if err != nil {
+		if err == fs.ErrorDirNotFound {
+			return nil, fs.ErrorObjectNotFound
+		}
+		return nil, err
+	}
+	found, err := f.listAll(ctx, directoryID, false, true, func(item *api.Item) bool {
+		if item.Name == leaf {
+			info = item
+			return true
+		}
+		return false
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fs.ErrorObjectNotFound
+	}
+	return info, nil
+}
+*/
+
+
+
+// statRemote stats the file or directory at the remote given
+func (f *Fs) stat(remote string) (info os.FileInfo, err error) {
+/*	c, err := f.getSftpConnection()
+	if err != nil {
+		return nil, errors.Wrap(err, "stat")
+	}
+	absPath := path.Join(f.root, remote)
+	info, err = c.sftpClient.Stat(absPath)
+	f.putSftpConnection(&c, err)*/
+
+  ctx := context.Background()
+  xrddir := remote
+
+  //xrddir :=  f.url + remote  //test
+  fmt.Printf("(f *fs) Stat xrddir= %q \n",xrddir)   //a retirer
+  client,path,err :=f.xrdremote(xrddir,ctx)
+
+  if err != nil{
+    return nil, fmt.Errorf("could not stat %q: %w", path, err)
+  }
+  defer client.Close()
+
+  fsx := client.FS()
+  fi,err := fsx.Stat(ctx,path)
+
+	return fi, err
+}
+
+
+// stat updates the info in the Object
+func (o *Object) stat() error {
+	info, err := o.fs.stat(o.remote)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fs.ErrorObjectNotFound
+		}
+		return errors.Wrap(err, "stat failed")
+	}
+	if info.IsDir() {
+		return errors.Wrapf(fs.ErrorNotAFile, "%q", o.remote)
+	}
+	o.setMetadata(info)
+	return nil
+}
+
+
+
+
+// readMetaData gets the metadata if it hasn't already been fetched
+
+//
+
+// it also sets the info
+/*
+func (o *Object) readMetaData(ctx context.Context) (err error) {
+
+	if o.hasMetaData {
+		return nil
+	}
+  info, err := o.getMetaData(ctx)
+	if err != nil {
+		return err
+	}
+	return o.setMetaData(info)
+}
+*/
+
+
+// setMetaData sets the metadata from info
+/*func (o *Object) setMetaData(info *api.Item) (err error) {
+
+	if info.Type != api.ItemTypeFile {
+		return errors.Wrapf(fs.ErrorNotAFile, "%q is %q", o.remote, info.Type)
+	}
+  o.hasMetaData = true
+  o.modTime = fi.ModTime()
+  o.sha1 = info.SHA1
+	o.size = fi.Size()
+	o.mode = fi.Mode()
+	return nil
+}
+*/
+
 func (o *Object) ModTime(ctx context.Context) time.Time {
 	return o.modTime
 }
@@ -444,6 +597,96 @@ func (o *Object) String() string {
 }
 
 
+// Fs is the filesystem this remote sftp file object is located within
+func (o *Object) Fs() fs.Info {
+	return o.fs
+}
+
+// Hash returns the SHA-1 of an object returning a lowercase hex string
+
+func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
+	if t != hash.SHA1 {
+		return "", hash.ErrUnsupported
+	}
+	return o.sha1, nil
+}
+
+
+// path returns the native path of the object
+func (o *Object) path() string {
+	return path.Join(o.fs.root, o.remote)
+}
+
+
+
+
+func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
+  return nil, nil
+}
+
+// Open an object for read
+/*
+func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
+  var offset, limit int64 = 0, -1
+	for _, option := range options {
+		switch x := option.(type) {
+		case *fs.SeekOption:
+			offset = x.Offset
+		case *fs.RangeOption:
+			offset, limit = x.Decode(o.Size())
+		default:
+			if option.Mandatory() {
+				fs.Logf(o, "Unsupported mandatory option: %v", option)
+			}
+		}
+	}
+  //xrddir := o.path()
+  xrddir :=  f.url      //test
+  client,path,err := o.fs.xrdremote(xrddir,ctx)
+  if err != nil{
+    return nil, fmt.Errorf("could not stat %q: %w", path, err)
+  }
+  defer client.Close()
+
+  fsx := client.FS()
+  fi,err := fsx.Stat(ctx,path)
+
+}
+*/
+
+
+// Remove an object
+func (o *Object) Remove(ctx context.Context) error {
+	return nil
+}
+
+
+
+// SetModTime sets the modification and access time to the specified time
+//
+// it also updates the info field
+func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
+ return nil
+}
+
+
+
+// Storable returns a boolean showing if this object is storable
+func (o *Object) Storable() bool {
+	return false
+}
+
+// Update the object from in with modTime and size
+func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (err error) {
+  return nil
+}
+
+var (
+    _ fs.Fs          = &Fs{}
+//  	_ fs.Mover       = &Fs{}
+//  	_ fs.DirMover    = &Fs{}
+//  	_ fs.Object      = &Object{}
+)
 
 //URL
 // Addr string // address (host [:port]) of the server
