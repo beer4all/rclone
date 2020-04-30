@@ -1,5 +1,7 @@
 // Package xrootd provides a filesystem interface using github.com/go-hep/hep/tree/master/xrootd
 
+//a retirer
+//commentaire
 
 package xrootd
 
@@ -43,11 +45,10 @@ func init(){
     Name:        "xrootd",
     Description: "xrootd-client",
     NewFs:       NewFs,
-    //config: func(name string, m )
 
     Options: []fs.Option{{
-     Name:     "path_xroot",
-     Help:     "xrootd host to connect to (default 'root' )",
+    Name:     "path_xroot",
+    Help:     "xrootd host to connect to (default 'root' )",
     Required: true,
 
     }, {
@@ -55,8 +56,8 @@ func init(){
   			Help: "xrootd username (default 'localhost') ",// leave blank for current username, " + currentUser,
       //  Required: true,
       }, {
-    			Name: "port",
-    			Help: "Xrootd port, leave blank to use default (1094)",
+    		Name: "port",
+    		Help: "Xrootd port, leave blank to use default (1094)",
       }, {
         Name: "path_to_file",
         Help: "Xrootd path path-to-file, example (/tmp) and default '/'",
@@ -93,13 +94,13 @@ type Fs struct {
 
 
 type Object struct {
-	fs      *Fs           // what this object is part of
-	remote  string       // The remote path
-  hasMetaData bool      // whether info below has been set
-	size    int64       // size of the object
-	modTime time.Time   // modification time of the object if known
-  mode    os.FileMode
-  sha1        string    // SHA-1 of the object content
+	fs            *Fs           // what this object is part of
+	remote        string       // The remote path
+  hasMetaData   bool      // whether info below has been set
+	size          int64       // size of the object
+	modTime       time.Time   // modification time of the object if known
+  mode          os.FileMode
+  sha1          string    // SHA-1 of the object content
 
 	//mode    os.FileMode // mode bits from the file
   //	md5sum  *string     // Cached MD5 checksum
@@ -168,7 +169,7 @@ func (f *Fs) connectxrootclient(scr string, ctx context.Context) (fi os.FileInfo
 // the host specified in the config file.
 func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
   ctx := context.Background()
-  fmt.Printf("utilisation de Newfs\n")
+  //fmt.Printf("utilisation de Newfs\n") //commentaire
 	// Parse config into Options struct
 	opt := new(Options)
 	err := configstruct.Set(m, opt)
@@ -211,7 +212,7 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
   }).Fill(f)
 
   cli,path,err := f.xrdremote(url, ctx)
-  fmt.Printf("func Newfs: path= %q & err= %w\n",path, err)
+  //fmt.Printf("func Newfs: path= %q & err= %w\n",path, err) //commentaire
   /*  fi,path,fsx,err := f.connectxrootclient(f.url, ctx)*/
   if err != nil {
     return nil, errors.Wrap(err, "NewFs")
@@ -225,7 +226,7 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 //  if err != nil {
 //  	return fmt.Errorf("could not create client: %w", err)
 //  }
-fmt.Printf("  Newfs: 234. f.root= %q \n",f.root)
+//fmt.Printf("  Newfs: 234. f.root= %q \n",f.root)  //commentaire
   f.root= path + f.root
   if f.root ==""{
     f.root = path
@@ -234,7 +235,7 @@ fmt.Printf("  Newfs: 234. f.root= %q \n",f.root)
     f.root = url
 
   }*/
-  fmt.Printf("  Newfs: 234. f.root= %q \n",f.root)
+//fmt.Printf("  Newfs: 238. f.root= %q \n",f.root)  //commentaire
   //return NewFsWithConnection(ctx, name, root, m, opt)
   return f, nil
 }
@@ -309,20 +310,29 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 
 
 // setMetadata sets the file info from the os.FileInfo passed in
-func (o *Object) setMetadata(fi os.FileInfo) {
-	o.modTime = fi.ModTime()
-	o.size = fi.Size()
-	o.mode = fi.Mode()
+func (o *Object) setMetadata(info os.FileInfo) {
+  if o.size != info.Size() {
+		o.size = info.Size()
+	}
+	if !o.modTime.Equal(info.ModTime()) {
+		o.modTime = info.ModTime()
+	}
+	if o.mode != info.Mode() {
+		o.mode = info.Mode()
+	}
+/*  fmt.Printf("modtime= %q \n",o.modTime) //commentaire
+  fmt.Printf("o.size = %d \n",o.size )
+  fmt.Printf("o.mode= %q \n",o.mode)*/
 }
 
 
-func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, fi os.FileInfo /*, long, recursive bool*/) (entries fs.DirEntries, err error) {
+func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, info os.FileInfo, dir string /*, long, recursive bool*/) (entries fs.DirEntries, err error) {
 	/*end := ""
 	if recursive {
 		end = ":"
 	}*/
-  fmt.Printf("Utilisation display \n")
-	dir := path.Join(root, fi.Name())
+  //fmt.Printf("Utilisation display \n") //commentaire
+	dirt := path.Join(root, info.Name())
 	//fmt.Printf("%s%s\n", dir, end)
 /*
 	if long {
@@ -330,45 +340,42 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, fi 
 	}
 */
 
-	ents, err := fsx.Dirlist(ctx, dir)
+	ents, err := fsx.Dirlist(ctx, dirt)
 
 	if err != nil {
-		return nil,fmt.Errorf("could not list dir %q: %w", dir, err)
+		return nil,fmt.Errorf("could not list dir %q: %w", dirt, err)
 	}
 
 	//o := tabwriter.NewWriter(os.Stdout, 8, 4, 0, ' ', tabwriter.AlignRight)
 
 	for _, e := range ents {
-    remote := path.Join(root, e.Name())
+    remote := path.Join(dir, e.Name())
+    //remote := e.Name()
     if e.IsDir() {
 			d := fs.NewDir(remote, e.ModTime())
 			entries = append(entries, d)
 		} else {
+
+      oldInfo := info
+			info, err = f.stat(remote)
+			if err != nil {
+				info = oldInfo
+			}
+
 			o := &Object{
 				fs:     f,
 				remote: remote,
 			}
-			o.setMetadata(fi)
+
+			o.setMetadata(info)
 			entries = append(entries, o)
 		}
-    fmt.Println("entries = ", entries)
+    //fmt.Println("entries = ", entries) //commentaire
     //format(o, dir, e, long)
 	}
-//	o.Flush()
-/*	if recursive {
-		for _, e := range ents {
-			if !e.IsDir() {
-				continue
-			}
-			// make an empty line before going into a subdirectory.
-			fmt.Printf("\n")
-		//	entries, err := display(ctx, fsx, dir, e, long, recursive)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}*/
-  fmt.Printf("entries  type = %T \n ", entries)
+
+
+  //fmt.Printf("entries  type = %T \n ", entries)  //commentaire
 	return entries,nil
 }
 
@@ -384,15 +391,12 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, fi 
 // found.
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
 
-  fmt.Printf("utilisation de list avec le chemin %q & url=%q \n", dir,f.url)
-  if dir == "" {
-    dir = "/."
-		//dir = "/back2"  //test
-	}
-  xrddir :=  f.root + dir
-  //xrddir :=  f.url + dir  //test
+  //fmt.Printf("utilisation de list avec le chemin %q & url=%q \n", dir,f.url) //commentaire
 
-  fmt.Printf("List xrddir= %q \n",xrddir) //a retirer
+  xrddir := path.Join(f.root, dir)
+  //xrddir :=  f.url + dir  //test
+  //xrddir := "root://localhost/tmp/back2"
+  //fmt.Printf("List xrddir= %q \n",xrddir) //a retirer //commentaire
   //fi,urlpath,fsx,err := f.connectxrootclient(dir, ctx)
   client,path,err :=f.xrdremote(xrddir,ctx)
   if path == "" {
@@ -411,8 +415,8 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
   if err != nil {
 		return nil, fs.ErrorDirNotFound  //errors.Wrap(err," could not stat" + url.Path )
 	}
-  entries,err = f.display(ctx, fsx, path, fi /*, false, false*/)
-  fmt.Printf("entries  type = %T \n ", entries)
+  entries,err = f.display(ctx, fsx, path, fi, dir /*, false, false*/)
+  //fmt.Printf("entries  type = %T \n ", entries)  //a retirer
 
   return entries,err
 }
@@ -456,34 +460,6 @@ func (f *Fs) String() string {
 
 
 
-// readMetaDataForPath reads the metadata from the path
-/*
-func (f *Fs) readMetaDataForPath(ctx context.Context, path string) (info *api.Item, err error) {
-	// defer fs.Trace(f, "path=%q", path)("info=%+v, err=%v", &info, &err)
-	leaf, directoryID, err := f.dirCache.FindRootAndPath(ctx, path, false)
-	if err != nil {
-		if err == fs.ErrorDirNotFound {
-			return nil, fs.ErrorObjectNotFound
-		}
-		return nil, err
-	}
-	found, err := f.listAll(ctx, directoryID, false, true, func(item *api.Item) bool {
-		if item.Name == leaf {
-			info = item
-			return true
-		}
-		return false
-	})
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, fs.ErrorObjectNotFound
-	}
-	return info, nil
-}
-*/
-
 
 
 // statRemote stats the file or directory at the remote given
@@ -497,21 +473,18 @@ func (f *Fs) stat(remote string) (info os.FileInfo, err error) {
 	f.putSftpConnection(&c, err)*/
 
   ctx := context.Background()
-  xrddir := remote
-
+  xrddir := f.url + "/" + remote
   //xrddir :=  f.url + remote  //test
-  fmt.Printf("(f *fs) Stat xrddir= %q \n",xrddir)   //a retirer
+//  fmt.Printf("(f *fs) Stat xrddir= %q \n",xrddir)   //a retirer  //commentaire
   client,path,err :=f.xrdremote(xrddir,ctx)
-
   if err != nil{
     return nil, fmt.Errorf("could not stat %q: %w", path, err)
   }
   defer client.Close()
 
   fsx := client.FS()
-  fi,err := fsx.Stat(ctx,path)
-
-	return fi, err
+  info,err = fsx.Stat(ctx,path)
+	return info, err
 }
 
 
@@ -583,6 +556,7 @@ func (o *Object) Remote() string {
 
 // Size returns the size of an object in bytes
 func (o *Object) Size() int64 {
+  //fmt.Printf("o.Size  \n")  //commentaire
 	return o.size
 }
 
