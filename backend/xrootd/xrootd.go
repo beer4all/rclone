@@ -313,6 +313,7 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 func (o *Object) setMetadata(info os.FileInfo) {
   if o.size != info.Size() {
 		o.size = info.Size()
+    //
 	}
 	if !o.modTime.Equal(info.ModTime()) {
 		o.modTime = info.ModTime()
@@ -348,19 +349,19 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, inf
 
 	//o := tabwriter.NewWriter(os.Stdout, 8, 4, 0, ' ', tabwriter.AlignRight)
 
-	for _, e := range ents {
-    remote := path.Join(dir, e.Name())
+	for _, info := range ents {
+    remote := path.Join(dir, info.Name())
     //remote := e.Name()
-    if e.IsDir() {
-			d := fs.NewDir(remote, e.ModTime())
+    if info.IsDir() {
+			d := fs.NewDir(remote, info.ModTime())
 			entries = append(entries, d)
 		} else {
 
-      oldInfo := info
+      /*oldInfo := info
 			info, err = f.stat(remote)
 			if err != nil {
 				info = oldInfo
-			}
+			}*/
 
 			o := &Object{
 				fs:     f,
