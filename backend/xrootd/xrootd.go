@@ -427,14 +427,47 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 
 
 func (f *Fs) Mkdir(ctx context.Context, dir string) error {
-	return nil
+  xrddir := path.Join(f.root, dir)
+  client,path,err :=f.xrdremote(xrddir,ctx)
+  if err != nil{
+    return err
+  }
+  defer client.Close()
+
+  err = os.MkdirAll(path, 0777)
+  //err = os.Mkdir(path, 0755
+
+  if err != nil {
+    return err
+  }
+  return nil
 }
 
 
 // Rmdir deletes the root folder
 // Returns an error if it isn't empty
 func (f *Fs) Rmdir(ctx context.Context, dir string) error {
-	return nil
+	// Check to see if directory is empty
+
+  //fmt.Printf("utilisation rmdir path= %q \n", dir)  //commentaire
+
+	entries, err := f.List(ctx, dir)
+	if err != nil {
+		return errors.Wrap(err, "Rmdir")
+	}
+	if len(entries) != 0 {
+		return fs.ErrorDirectoryNotEmpty
+	}
+	// Remove the directory
+  xrddir := path.Join(f.root, dir)
+  client,path,err :=f.xrdremote(xrddir,ctx)
+  if err != nil{
+    return err
+  }
+  defer client.Close()
+
+  err = client.FS().RemoveDir(ctx, path)
+  return err
 }
 
 func (f *Fs) Precision() time.Duration {
@@ -456,7 +489,7 @@ func (f *Fs) Root() string {
 
 // String converts this Fs to a string (String returns the URL for the filesystem)
 func (f *Fs) String() string {
-	return ""
+	return f.url
 }
 
 
@@ -630,10 +663,6 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 */
 
 
-// Remove an object
-func (o *Object) Remove(ctx context.Context) error {
-	return nil
-}
 
 
 
@@ -641,7 +670,19 @@ func (o *Object) Remove(ctx context.Context) error {
 //
 // it also updates the info field
 func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
- return nil
+/*  if !o.fs.opt.SetModTime {
+ 		return nil
+ 	}
+*/
+  err := os.Chtimes(o.path(), modTime, modTime)
+  if err != nil {
+		return err
+	}
+  err = o.stat()
+	if err != nil {
+		return errors.Wrap(err, "SetModTime stat failed")
+	}
+	return nil
 }
 
 
@@ -655,6 +696,29 @@ func (o *Object) Storable() bool {
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (err error) {
   return nil
 }
+
+
+// Remove a remote sftp file object
+
+func (o *Object) Remove(ctx context.Context) error {
+  //xrddir := path.Join(f.root, dir)
+  client,path,err :=o.fs.xrdremote(o.path(),ctx)
+  if err != nil{
+    return err
+  }
+  defer client.Close()
+
+  err = client.FS().RemoveFile(ctx, path);
+
+  if  err != nil {
+      return err
+  }
+
+	return err
+  return nil
+}
+
+
 
 var (
     _ fs.Fs          = &Fs{}
