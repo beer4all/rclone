@@ -11,6 +11,7 @@ import(
 	"io"
   "os"
   "path"
+  "path/filepath"
 //  "strings"
   "fmt"
 
@@ -32,7 +33,7 @@ import(
 
 // Constants
 const (
-  titre_fonction = true
+  titre_fonction = false
 )
 
 
@@ -175,7 +176,7 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
   }
 
   ctx := context.Background()
-  //fmt.Printf("utilisation de Newfs\n") //commentaire
+
 	// Parse config into Options struct
 	opt := new(Options)
 	err := configstruct.Set(m, opt)
@@ -200,7 +201,7 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 	}
 
   //path_name =  opt.Path_xroot + "://" + opt.User + ":" + opt.Port + "/" + opt.Path_to_file,
-  url := opt.Path_xroot + "://" + opt.User + ":" + opt.Port + "/" + opt.Path_to_file
+  url := opt.Path_xroot + "://" + opt.User + ":" + opt.Port + "/" + opt.Path_to_file +"/" + root
 
     f := &Fs{
     name:      name,
@@ -218,7 +219,6 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
   }).Fill(f)
 
   cli,path,err := f.xrdremote(url, ctx)
-
   //fmt.Printf("func Newfs: path= %q & err= %w\n",path, err) //commentaire
   /*  fi,path,fsx,err := f.connectxrootclient(f.url, ctx)*/
   if err != nil {
@@ -227,10 +227,29 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
   defer cli.Close()
 
 
-  f.root= path + f.root
-  if f.root ==""{
-    f.root = path
-  }
+  if root != "" {
+		// Check to see if the root actually an existing file
+		remote := filepath.Base(path)
+		f.root = filepath.Dir(path)
+    fmt.Println("newfs baseroot=",remote) //commentaire
+		if f.root == "." {
+			f.root = ""
+		}
+		_, err := f.NewObject(ctx, remote)
+		if err != nil {
+			if err == fs.ErrorObjectNotFound || errors.Cause(err) == fs.ErrorNotAFile {
+				// File doesn't exist so return old f
+
+				f.root = path
+        fmt.Println("retourne old Fs= ", f, " root = ",path)
+				return f, nil
+			}
+			return nil, err
+		}
+		// return an error with an fs which points to the parent
+		return f, fs.ErrorIsFile
+	}
+
   /*if root != "" {
     f.root = url
 
@@ -306,7 +325,7 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 		fs:     f,
 		remote: remote,
 	}
-  fmt.Println("Newobject1 = ",o)  //commentaire
+  fmt.Println("Newobject fs = ",f," remote=",remote)  //commentaire
 	err := o.stat()
 	if err != nil {
 		return nil, err
@@ -344,7 +363,7 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, inf
   }
 
   dirt := path.Join(root, info.Name())
-  if !info.IsDir() {  // if a revoir
+/*  if !info.IsDir() {  // if a revoir
     //name := strings.SplitAfter(dirt, "/")
     //remote := name[len(name)-1]
     o := &Object{
@@ -355,7 +374,7 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, inf
     o.setMetadata(info)
     entries = append(entries, o)
     return entries,nil
-	}
+	}*/
 
 
 	ents, err := fsx.Dirlist(ctx, dirt)
@@ -390,7 +409,15 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, inf
 	return entries,nil
 }
 
-
+/*
+func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
+  if titre_fonction == true{
+    fmt.Printf("Utilisation de la fonction fs list \n")
+  }
+  fmt.Printf("utilisation de list avec le chemin %q & url=%q \n", dir,f.root) //commentaire
+  return nil,nil
+}
+*/
 // List the objects and directories in dir into entries.  The
 // entries can be returned in any order but should be for a
 // complete directory.
@@ -400,6 +427,7 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, inf
 //
 // This should return ErrDirNotFound if the directory isn't
 // found.
+
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
   if titre_fonction == true{
     fmt.Printf("Utilisation de la fonction fs list \n")
@@ -429,7 +457,7 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
   if err != nil {
 		return nil, fs.ErrorDirNotFound  //errors.Wrap(err," could not stat" + url.Path )
 	}
-  entries,err = f.display(ctx, fsx, path, fi, dir /*, false, false*/)
+  entries,err = f.display(ctx, fsx, path, fi, dir )
   //fmt.Printf("entries  type = %T \n ", entries)  //a retirer
 
   return entries,err
@@ -533,6 +561,9 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object,
 //
 // If destination exists then return fs.ErrorDirExists
 func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string) error {
+  if titre_fonction == true{
+    fmt.Printf("Utilisation de la fonction fs DirMove \n")
+  }
   srcFs, ok := src.(*Fs)
 	if !ok {
 		fs.Debugf(srcFs, "Can't move directory - not same remote type")
@@ -638,11 +669,15 @@ func (o *Object) stat() error {
     fmt.Printf("Utilisation de la fonction object stat \n")
   }
 	info, err := o.fs.stat(o.remote)
+
 	if err != nil {
-		if os.IsNotExist(err) {
-			return fs.ErrorObjectNotFound
-		}
-		return errors.Wrap(err, "stat failed")
+
+		//if os.IsNotExist(err) {
+  //    fmt.Printf("appel fct stat 2 \n")
+	//		return fs.ErrorObjectNotFound
+//		}
+		//return errors.Wrap(err, "stat failed")
+    return fs.ErrorObjectNotFound
 	}
 	if info.IsDir() {
 		return errors.Wrapf(fs.ErrorNotAFile, "%q", o.remote)
