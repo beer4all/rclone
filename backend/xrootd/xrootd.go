@@ -624,6 +624,11 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 }
 
 
+// PutStream uploads to the remote path with the modTime given of indeterminate size
+func (f *Fs) PutStream(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
+	return f.Put(ctx, in, src, options...)
+}
+
 // Root of the remote (as passed into NewFs)
 func (f *Fs) Root() string {
 	return f.root
@@ -917,11 +922,15 @@ defer client.Close()*/
 }
 
 
-
 // Storable returns a boolean showing if this object is storable
 func (o *Object) Storable() bool {
-	return false
+  if titre_fonction == true{
+    fmt.Printf("Utilisation de la fonction object Storable \n")
+  }
+
+	return o.mode.IsRegular()
 }
+
 
 // Update the object from in with modTime and size
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (err error) {
@@ -930,38 +939,15 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
   }
 
 
-  client,path,err := o.fs.xrdremote(o.path(),ctx)
-  if err != nil{
-    return errors.Wrap(err, "Update: open client failed")
-  }
-  defer client.Close()
+  err = os.MkdirAll(filepath.Dir(o.path()), 0755)
 
-  //err = os.MkdirAll(path, 0777)
-  if err != nil {
-    return errors.Wrap(err, "could not create output directory")
-	}
 
-  fsx := client.FS()
-
-  file, err := xrdio.OpenFrom(fsx, path)
+  out, err := os.Create(o.path())
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 
-//  file, err := client.FS().Open(ctx, path,xrdfs.OpenModeOwnerRead, xrdfs.OpenOptionsOpenRead)
-//  if err != nil {
-//    return errors.Wrap(err, "update: Open file failed")
-//  }
-
-
-//  file, err := xrdio.Open(o.path())
-  fmt.Printf("ouverture? \n")
-  //_, err = io.Copy(file, in)
-
-
-
-  _, err = io.CopyBuffer(file, in, make([]byte, 16*1024*1024))
+  _, err = io.CopyBuffer(out, in, make([]byte, 16*1024*1024))
 
 	if err != nil {
 	 return errors.Wrap(err, "update: could not copy to output file")
@@ -970,11 +956,10 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 //  _, err =  file.WriteAt([]byte(in), 0)
 
 
-  err = file.Close()
-
+/*  err = file.Close()
   if err != nil{
     return errors.Wrap(err, "update: close file failed")
-  }
+  }*/
 
 
   err = o.SetModTime(ctx, src.ModTime(ctx))
@@ -986,7 +971,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 
 // Remove a remote sftp file object
-
 func (o *Object) Remove(ctx context.Context) error {
   if titre_fonction == true{
     fmt.Printf("Utilisation de la fonction object remove ")
@@ -1000,11 +984,7 @@ func (o *Object) Remove(ctx context.Context) error {
 
   err = client.FS().RemoveFile(ctx, path);
 
-  if  err != nil {
-      return err
-  }
-
-  return nil
+  return err
 }
 
 
@@ -1015,9 +995,4 @@ var (
 //  	_ fs.DirMover    = &Fs{}
 //  	_ fs.Object      = &Object{}
 )
-
-//URL
-// Addr string // address (host [:port]) of the server
-// User string // user name to use to log in
-// Path string // path to the remote file or directory
 
