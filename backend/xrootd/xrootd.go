@@ -250,7 +250,6 @@ func (o *Object) setMetadata(info os.FileInfo) {
   }
   if o.size != info.Size() {
 		o.size = info.Size()
-    //
 	}
 	if !o.modTime.Equal(info.ModTime()) {
 		o.modTime = info.ModTime()
@@ -466,14 +465,17 @@ func (f *Fs) dirExists(ctx context.Context, dir string) (bool, error) {
   }
   defer client.Close()
 
-//  fsx := client.FS()
-//  fi,err := fsx.Stat(ctx,path)
+  fsx := client.FS()
+  info,err := fsx.Stat(ctx,path)
   if err!=nil{
     if os.IsNotExist(err){
       return false, nil
 		}
 		return false, errors.Wrap(err, "dirExists stat failed")
   }
+  if !info.IsDir() {
+		return false, fs.ErrorIsFile
+	}
   return true, nil
 }
 
@@ -502,16 +504,17 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
 
   // Check if destination exists
   ok, err := f.dirExists(ctx,dstPath)
-  if err != nil {
-  	return errors.Wrap(err, "DirMove dirExists dst failed")
-  }
   if ok {
-  	return fs.ErrorDirExists
+    return fs.ErrorDirExists
   }
+/*  if err != nil {
+  	return errors.Wrap(err, "DirMove dirExists dst failed")
+  }*/
+
 
   client,path,err :=f.xrdremote(dstPath,ctx)
   if err != nil{
-    return errors.Wrap(err, "dirMove")
+    return errors.Wrap(err, "dirMove not open client")
   }
   defer client.Close()
 
@@ -681,9 +684,26 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 	if t != hash.SHA1 {
 		return "", hash.ErrUnsupported
 	}
+
 	return o.sha1, nil
 }
+/*
+// Hash returns the SHA-1 of an object returning a lowercase hex string
+func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
+  if titre_fonction == true{
+    fmt.Printf("Utilisation de la fonction object hash \n")
+  }
 
+	err := o.stat()
+	if err != nil {
+		return "", errors.Wrap(err, "hash: failed to stat")
+	}
+  if t != hash.SHA1 {
+		return "", hash.ErrUnsupported
+	}
+
+	return o.sha1, nil
+}*/
 
 // path returns the native path of the object
 func (o *Object) path() string {
@@ -783,7 +803,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
     fmt.Printf("Utilisation de la fonction object update \n")
   }
 
-
   err = os.MkdirAll(filepath.Dir(o.path()), 0755)
 
 
@@ -807,7 +826,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
   err = o.SetModTime(ctx, src.ModTime(ctx))
 	if err != nil {
-		return errors.Wrap(err, "Update SetModTime failed")
+		return errors.Wrap(err, "Update: SetModTime failed")
 	}
 
 	return nil
