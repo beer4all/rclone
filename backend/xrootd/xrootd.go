@@ -23,7 +23,7 @@ import(
 
   "github.com/pkg/errors"
   "github.com/rclone/rclone/fs"
-//	"github.com/rclone/rclone/fs/config"
+  //"github.com/rclone/rclone/fs/config"
   "github.com/rclone/rclone/fs/config/configmap"
   "github.com/rclone/rclone/fs/config/configstruct"
   "github.com/rclone/rclone/fs/hash"
@@ -95,7 +95,7 @@ type Fs struct {
 
 type Object struct {
 	fs            *Fs           // what this object is part of
-	remote        string       // The remote path
+  remote        string       // The remote path
   hasMetaData   bool      // whether info below has been set
 	size          int64       // size of the object
 	modTime       time.Time   // modification time of the object if known
@@ -120,32 +120,6 @@ func (f *Fs) xrdremote(name string, ctx context.Context) (client *xrootd.Client,
 	return client, path, err
 }
 
-
-/*
-func (f *Fs) connectxrootclient(scr string, ctx context.Context) (fi os.FileInfo,path string ,fsx xrdfs.FileSystem, err error){
-  url, err := xrdio.Parse(scr)
-  if err!= nil{
-
-    return nil, "", nil, errors.Wrap(err, "could not parse "+ scr)
-  }
-  client, err := xrootd.NewClient(ctx, url.Addr, url.User)  //client *xrootd.Client
-
-
-	if err != nil {
-    return nil, "", nil, errors.Wrap(err, "could not create client ")
-	}
-  defer client.Close()
-
-  fsx = client.FS()
-
-	fi, err = fsx.Stat(ctx, url.Path)
-	// TODO fi.Name() here is an empty string (see handling in format() below)
-	if err != nil {
-    return nil, "",nil, errors.Wrap(err," could not stat" + url.Path )
-	}
-  return fi ,url.Path, fsx , nil
-}
-*/
 
 
 // NewFs creates a new Fs object from the name and root. It connects to
@@ -358,9 +332,15 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 		return nil, fs.ErrorDirNotFound  //errors.Wrap(err," could not stat" + url.Path )
 	}
   entries,err = f.display(ctx, fsx, path, fi, dir )
-  //fmt.Printf("entries  type = %T \n ", entries)  //a retirer
+  if  err != nil {
+      return entries,err
+  }
 
-  return entries,err
+  err = client.Close();
+  if  err != nil {
+      return entries,err
+  }
+  return entries,nil
 }
 
 
@@ -383,6 +363,11 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 
   if err != nil {
     return err
+  }
+
+  err = client.Close();
+  if  err != nil {
+      return err
   }
   return nil
 }
@@ -414,7 +399,16 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
   defer client.Close()
 
   err = client.FS().RemoveDir(ctx, path)
-  return err
+  if  err != nil {
+      return err
+  }
+
+  err = client.Close();
+  if  err != nil {
+      return err
+  }
+
+  return nil
 }
 
 // Move renames a remote xrootd file object
@@ -451,7 +445,36 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object,
   if err != nil {
 		return nil, errors.Wrap(err, "Move NewObject failed")
 	}
+
+  err = client.Close();
+  if  err != nil {
+      return dstObj,err
+  }
+
   return dstObj, nil
+}
+
+
+
+// dirExists returns true,nil if the directory exists, false, nil if
+// it doesn't or false, err
+func (f *Fs) dirExists(ctx context.Context, dir string) (bool, error) {
+  client,path,err :=f.xrdremote(dir,ctx)
+
+  if err != nil{
+    return false, fmt.Errorf("could not stat %q: %w", path, err)
+  }
+  defer client.Close()
+
+//  fsx := client.FS()
+//  fi,err := fsx.Stat(ctx,path)
+  if err!=nil{
+    if os.IsNotExist(err){
+      return false, nil
+		}
+		return false, errors.Wrap(err, "dirExists stat failed")
+  }
+  return true, nil
 }
 
 
@@ -467,14 +490,24 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
   if titre_fonction == true{
     fmt.Printf("Utilisation de la fonction fs DirMove \n")
   }
+
   srcFs, ok := src.(*Fs)
 	if !ok {
 		fs.Debugf(srcFs, "Can't move directory - not same remote type")
 		return fs.ErrorCantDirMove
 	}
-  srcPath := path.Join(srcFs.root, srcRemote)
-	dstPath := path.Join(f.root, dstRemote)
 
+  srcPath := path.Join(srcFs.root, srcRemote)
+  dstPath := path.Join(f.root, dstRemote)
+
+  // Check if destination exists
+  ok, err := f.dirExists(ctx,dstPath)
+  if err != nil {
+  	return errors.Wrap(err, "DirMove dirExists dst failed")
+  }
+  if ok {
+  	return fs.ErrorDirExists
+  }
 
   client,path,err :=f.xrdremote(dstPath,ctx)
   if err != nil{
@@ -494,6 +527,11 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
   err = client.FS().Rename(ctx, srcPath , dstPath);
   if err != nil {
   		return errors.Wrapf(err, "DirMove Rename(%q,%q) failed", srcPath, dstPath)
+  }
+
+  err = client.Close();
+  if  err != nil {
+      return err
   }
 
   return  nil
@@ -560,7 +598,16 @@ func (f *Fs) stat(remote string) (info os.FileInfo, err error) {
   fsx := client.FS()
   info,err = fsx.Stat(ctx,path)
   //fmt.Println("stat fs info = ",info, " path= ",path)  //commentaire
-	return info, err
+  if  err != nil {
+      return info,err
+  }
+
+  err = client.Close();
+  if  err != nil {
+      return info,err
+  }
+
+	return info, nil
 }
 
 
@@ -741,22 +788,28 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 
   out, err := os.Create(o.path())
-	if err != nil {
+  if err != nil {
 		return err
 	}
 
   _, err = io.CopyBuffer(out, in, make([]byte, 16*1024*1024))
 
 	if err != nil {
-	 return errors.Wrap(err, "update: could not copy to output file")
+    return errors.Wrap(err, "update: could not copy to output file")
 //  fmt.Printf("copy ok? \n")  //commentaire
 	}
+
+  err = out.Close()
+  if err != nil {
+    return errors.Wrap(err,"could not close output file")
+  }
 
 
   err = o.SetModTime(ctx, src.ModTime(ctx))
 	if err != nil {
 		return errors.Wrap(err, "Update SetModTime failed")
 	}
+
 	return nil
 }
 
@@ -774,8 +827,15 @@ func (o *Object) Remove(ctx context.Context) error {
   defer client.Close()
 
   err = client.FS().RemoveFile(ctx, path);
+  if  err != nil {
+      return err
+  }
 
-  return err
+  err = client.Close();
+  if  err != nil {
+      return err
+  }
+  return nil
 }
 
 
