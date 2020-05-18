@@ -251,6 +251,7 @@ func (o *Object) setMetadata(info os.FileInfo) {
   if o.size != info.Size() {
 		o.size = info.Size()
 	}
+//  fmt.Println("SetMEtadata: o.modTime =",o.modTime ,"modTIme =", info.ModTime())
 	if !o.modTime.Equal(info.ModTime()) {
 		o.modTime = info.ModTime()
 	}
@@ -560,6 +561,7 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 	}
 	err := o.Update(ctx, in, src, options...)
 	if err != nil {
+
 		return nil, err
 	}
 	return o, nil
@@ -681,13 +683,20 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
   if titre_fonction == true{
     fmt.Printf("Utilisation de la fonction object hash \n")
   }
+
 	if t != hash.SHA1 {
 		return "", hash.ErrUnsupported
 	}
-
 	return o.sha1, nil
 }
+
 /*
+// Hash returns the SHA-1 of an object returning a lowercase hex string
+
+func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
+	return "", hash.ErrUnsupported
+}
+
 // Hash returns the SHA-1 of an object returning a lowercase hex string
 func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
   if titre_fonction == true{
@@ -772,10 +781,16 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 // it also updates the info field
 func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction object sedmodtime \n")
+    fmt.Printf("Utilisation de la fonction object setModtime \n")
   }
 
-  err := os.Chtimes(o.path(), modTime, modTime)
+  client,path,err :=o.fs.xrdremote(o.path(),ctx)
+  if err != nil{
+    return err
+  }
+  defer client.Close()
+
+  err = os.Chtimes(path, modTime, modTime)
   if err != nil {
 		return err
 	}
@@ -783,6 +798,7 @@ func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
 	if err != nil {
 		return errors.Wrap(err, "SetModTime stat failed")
 	}
+  //fmt.Println("setModTime time=",o.modTime," modTIme =", modTime," object=",o.path())
 	return nil
 }
 
@@ -811,15 +827,38 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		return err
 	}
 
+  // remove the file if upload failed
+
+	remove := func() {
+    client,path,removeErr :=o.fs.xrdremote(o.path(),ctx)
+    if removeErr != nil{
+      	fs.Debugf(src, "Failed to open client", removeErr)
+    }
+    defer client.Close()
+    removeErr = client.FS().RemoveFile(ctx, path);
+
+		if removeErr != nil {
+			fs.Debugf(src, "Failed to remove: %v", removeErr)
+		} else {
+			fs.Debugf(src, "Removed after failed upload: %v", err)
+		}
+    removeErr = client.Close();
+    if  removeErr != nil {
+        fs.Debugf(src, "Failed to close client ", removeErr)
+    }
+	}
+
   _, err = io.CopyBuffer(out, in, make([]byte, 16*1024*1024))
 
 	if err != nil {
+    remove()
     return errors.Wrap(err, "update: could not copy to output file")
 //  fmt.Printf("copy ok? \n")  //commentaire
 	}
 
   err = out.Close()
   if err != nil {
+    remove()
     return errors.Wrap(err,"could not close output file")
   }
 
@@ -833,7 +872,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 }
 
 
-// Remove a remote sftp file object
+// Remove a remote xrootd file object
 func (o *Object) Remove(ctx context.Context) error {
   if titre_fonction == true{
     fmt.Printf("Utilisation de la fonction object remove ")
