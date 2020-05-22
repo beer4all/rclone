@@ -1,8 +1,5 @@
 // Package xrootd provides a filesystem interface using github.com/go-hep/hep/tree/master/xrootd
 
-//a retirer
-//commentaire
-
 package xrootd
 
 import(
@@ -13,6 +10,7 @@ import(
   "path"
   "path/filepath"
   "fmt"
+  "sync"
 
 
 
@@ -33,6 +31,7 @@ import(
 // Constants
 const (
   titre_fonction = false
+  maxSizeForCopy = 5 * 1024 * 1024  // The maximum size of object we can COPY
 )
 
 
@@ -87,25 +86,21 @@ type Fs struct {
   name         string                // name of this remote
 	root         string                // the path we are working on
 	opt          Options               // parsed options
+  //m            configmap.Mapper // config
   url          string
   features     *fs.Features          // optional features
-//	srv          *rest.Client          // the connection to the one drive server
+  objectHashesMu sync.Mutex // global lock for Object.hashes
 }
 
 
 type Object struct {
 	fs            *Fs           // what this object is part of
   remote        string       // The remote path
-  hasMetaData   bool      // whether info below has been set
 	size          int64       // size of the object
 	modTime       time.Time   // modification time of the object if known
   mode          os.FileMode
-  sha1          string    // SHA-1 of the object content
-
-	//mode    os.FileMode // mode bits from the file
-  //	md5sum  *string     // Cached MD5 checksum
-  //	sha1sum *string     // Cached SHA1 checksum
-  //id          string    // ID of the object
+//  sha1          string    // SHA-1 of the object content
+  hashes         map[hash.Type]string // Hashes
 }
 
 
@@ -126,7 +121,7 @@ func (f *Fs) xrdremote(name string, ctx context.Context) (client *xrootd.Client,
 // the host specified in the config file.
 func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction newfs \n")
+    fmt.Println("Utilisation de la fonction newfs  ")
   }
 
   ctx := context.Background()
@@ -160,7 +155,7 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
     name:      name,
     root:      root,
     opt:       *opt,
-   // m:         m,
+    //m:         m,
     url:       url,
   //pacer:       fs.NewPacer(pacer.NewDefault(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
   }
@@ -181,7 +176,6 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 		// Check to see if the root actually an existing file
 		remote := filepath.Base(path)
 		f.root = filepath.Dir(path)
-    //fmt.Println("newfs baseroot=",remote) //commentaire
 		if f.root == "." {
 			f.root = ""
 		}
@@ -191,7 +185,6 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 				// File doesn't exist so return old f
 
 				f.root = path
-        // fmt.Println("retourne old Fs= ", f, " root = ",path) //commentaire
 				return f, nil
 			}
 			return nil, err
@@ -227,13 +220,13 @@ func (f *Fs) Hashes() hash.Set {
 // it returns the error fs.ErrorObjectNotFound.
 func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction fs NewObject \n")
+    fmt.Println("Utilisation de la fonction fs NewObject  ")
   }
 	o := &Object{
 		fs:     f,
 		remote: remote,
 	}
-	err := o.stat()
+	err := o.stat(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -246,12 +239,11 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 // setMetadata sets the file info from the os.FileInfo passed in
 func (o *Object) setMetadata(info os.FileInfo) {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction object setMetadata \n")
+    fmt.Println("Utilisation de la fonction object setMetadata  ")
   }
   if o.size != info.Size() {
 		o.size = info.Size()
 	}
-//  fmt.Println("SetMEtadata: o.modTime =",o.modTime ,"modTIme =", info.ModTime())
 	if !o.modTime.Equal(info.ModTime()) {
 		o.modTime = info.ModTime()
 	}
@@ -264,7 +256,7 @@ func (o *Object) setMetadata(info os.FileInfo) {
 //Continuation of the List function
 func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, info os.FileInfo, dir string ) (entries fs.DirEntries, err error) {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction display \n")
+    fmt.Println("Utilisation de la fonction display  ")
   }
 
   dirt := path.Join(root, info.Name())
@@ -308,7 +300,7 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, inf
 
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction fs list \n")
+    fmt.Println("Utilisation de la fonction fs list  ")
   }
 
   //fmt.Printf("utilisation de list avec le chemin %q & url=%q \n", dir,f.url) //commentaire
@@ -349,7 +341,7 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 // Mkdir creates the directory if it doesn't exist
 func (f *Fs) Mkdir(ctx context.Context, dir string) error {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction fs mkdir \n")
+    fmt.Println("Utilisation de la fonction fs mkdir  ")
   }
   xrddir := path.Join(f.root, dir)
   client,path,err :=f.xrdremote(xrddir,ctx)
@@ -359,7 +351,6 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
   defer client.Close()
 
   err = os.MkdirAll(path, 0755)
-  //err = os.Mkdir(path, 0755
 
   if err != nil {
     return err
@@ -378,7 +369,7 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 // Returns an error if it isn't empty
 func (f *Fs) Rmdir(ctx context.Context, dir string) error {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction fs rmdir \n")
+    fmt.Println("Utilisation de la fonction fs rmdir  ")
   }
 
 	// Check to see if directory is empty
@@ -416,7 +407,7 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 // It returns the destination Object and a possible error
 func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object, error) {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction fs Move \n")
+    fmt.Println("Utilisation de la fonction fs Move  ")
   }
 
   srcObj, ok := src.(*Object)
@@ -426,16 +417,13 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object,
 	}
 
   xrddir := path.Join(f.root, remote)
-  //fmt.Println("xrddir = ",xrddir)  //commentaire
+
   client,path,err :=f.xrdremote(xrddir,ctx)
   if err != nil{
     return nil, errors.Wrap(err, "Move")
   }
   defer client.Close()
 
-  //fmt.Println("srcObj.path() = ",srcObj.path()," path = ",path)  //commentaire
-  //
-  //err = client.FS().Rename(ctx, srcObj.path(), xrddir);
   err = client.FS().Rename(ctx, srcObj.path(), path);
   if err != nil {
 		return nil, errors.Wrap(err, "Move Rename failed")
@@ -491,7 +479,7 @@ func (f *Fs) dirExists(ctx context.Context, dir string) (bool, error) {
 // If destination exists then return fs.ErrorDirExists
 func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string) error {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction fs DirMove \n")
+    fmt.Println("Utilisation de la fonction fs DirMove  ")
   }
 
   srcFs, ok := src.(*Fs)
@@ -508,9 +496,6 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
   if ok {
     return fs.ErrorDirExists
   }
-/*  if err != nil {
-  	return errors.Wrap(err, "DirMove dirExists dst failed")
-  }*/
 
 
   client,path,err :=f.xrdremote(dstPath,ctx)
@@ -550,10 +535,8 @@ func (f *Fs) Precision() time.Duration {
 // Put data from <in> into a new remote xrootd file object described by <src.Remote()> and <src.ModTime(ctx)>
 func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction fs put \n")
+    fmt.Println("Utilisation de la fonction fs put")
   }
-  //fmt.Println("put src.Remote() ok = ",src.Remote(), "in = ", in) //commentaire
-	//o,err := f.NewObject(ctx, src.Remote())
 
   o := &Object{
 		fs:     f,
@@ -587,12 +570,11 @@ func (f *Fs) String() string {
 
 
 // statRemote stats the file or directory at the remote given
-func (f *Fs) stat(remote string) (info os.FileInfo, err error) {
+func (f *Fs) stat(ctx context.Context, remote string) (info os.FileInfo, err error) {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction fs stat \n")
+    fmt.Println("Utilisation de la fonction fs stat  ")
   }
 
-  ctx := context.Background()
   xrddir := path.Join(f.root, remote)
 
   client,path,err :=f.xrdremote(xrddir,ctx)
@@ -602,7 +584,6 @@ func (f *Fs) stat(remote string) (info os.FileInfo, err error) {
   defer client.Close()
   fsx := client.FS()
   info,err = fsx.Stat(ctx,path)
-  //fmt.Println("stat fs info = ",info, " path= ",path)  //commentaire
   if  err != nil {
       return info,err
   }
@@ -617,11 +598,11 @@ func (f *Fs) stat(remote string) (info os.FileInfo, err error) {
 
 
 // stat updates the info in the Object
-func (o *Object) stat() error {
+func (o *Object) stat(ctx context.Context) error {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction object stat \n")
+    fmt.Println("Utilisation de la fonction object stat  ")
   }
-	info, err := o.fs.stat(o.remote)
+	info, err := o.fs.stat(ctx, o.remote)
 
 	if err != nil {
 
@@ -657,7 +638,6 @@ func (o *Object) Remote() string {
 
 // Size returns the size of an object in bytes
 func (o *Object) Size() int64 {
-  //fmt.Printf("o.Size  \n")  //commentaire
 	return o.size
 }
 
@@ -678,41 +658,52 @@ func (o *Object) Fs() fs.Info {
 }
 
 
-// Hash returns the SHA-1 of an object returning a lowercase hex string
-func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
-  if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction object hash \n")
-  }
+// Hash returns the requested hash of a file as a lowercase hex string
+func (o *Object) Hash(ctx context.Context, r hash.Type) (string, error) {
+	// Check that the underlying file hasn't changed
+	oldtime := o.modTime
 
-	if t != hash.SHA1 {
-		return "", hash.ErrUnsupported
-	}
-	return o.sha1, nil
-}
+	oldsize := o.size
 
-/*
-// Hash returns the SHA-1 of an object returning a lowercase hex string
-
-func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
-	return "", hash.ErrUnsupported
-}
-
-// Hash returns the SHA-1 of an object returning a lowercase hex string
-func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
-  if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction object hash \n")
-  }
-
-	err := o.stat()
+	err := o.stat(ctx)
 	if err != nil {
 		return "", errors.Wrap(err, "hash: failed to stat")
 	}
-  if t != hash.SHA1 {
-		return "", hash.ErrUnsupported
-	}
 
-	return o.sha1, nil
-}*/
+	o.fs.objectHashesMu.Lock()
+	hashes := o.hashes
+	hashValue, hashFound := o.hashes[r]
+	o.fs.objectHashesMu.Unlock()
+
+	if !o.modTime.Equal(oldtime) || oldsize != o.size || hashes == nil || !hashFound {
+		var in io.ReadCloser
+
+      in, err = xrdio.Open(o.path())
+      if err!= nil{
+        return "", errors.Wrap(err, "Hash open failed")
+      }
+
+  		hashes, err = hash.StreamTypes(in, hash.NewHashSet(r))
+  		closeErr := in.Close()
+  		if err != nil {
+  			return "", errors.Wrap(err, "hash: failed to read")
+  		}
+  		if closeErr != nil {
+  			return "", errors.Wrap(closeErr, "hash: failed to close")
+  		}
+
+  		hashValue = hashes[r]
+  		o.fs.objectHashesMu.Lock()
+  		if o.hashes == nil {
+  			o.hashes = hashes
+  		} else {
+  			o.hashes[r] = hashValue
+  		}
+  		o.fs.objectHashesMu.Unlock()
+	}
+	return hashValue, nil
+}
+
 
 // path returns the native path of the object
 func (o *Object) path() string {
@@ -721,10 +712,12 @@ func (o *Object) path() string {
 
 
 
+
+
 // Open an object for read
 func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction object open \n ")
+    fmt.Println("Utilisation de la fonction object open   ")
   }
   var offset, limit int64 = 0, -1
 	for _, option := range options {
@@ -739,23 +732,12 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 			}
 		}
 	}
-  //xrddir := o.path()
-//  client,path,err := o.fs.xrdremote(o.path(),ctx)
-//  if err != nil{
-//    return nil, fmt.Errorf("could not stat %q: %w", path, err)
-//  }
-//  defer client.Close()
-//  fsx := client.FS()
-  //xrdfile, err := client.FS().Open(ctx, path,xrdfs.OpenModeOwnerRead, xrdfs.OpenOptionsOpenRead)
-//  xrdfile, err := fsx.Open(ctx, path,xrdfs.OpenModeOwnerRead, xrdfs.OpenOptionsOpenRead)  //xrdfile type = *xrootd.file
-//  if err != nil {
-//    return nil, errors.Wrap(err, "Open failed")
-//  }
-  xrdfile, err := xrdio.Open(o.path())
-    //fmt.Println("xrdfile = ",xrdfile)  //commentaire
 
-  //fsx := client.FS()
-  //fi,err := fsx.Stat(ctx,path)
+  xrdfile, err := xrdio.Open(o.path())
+  if err!= nil{
+    return nil, errors.Wrap(err, "Open failed")
+  }
+
 
   if offset > 0 {
 		off, err := xrdfile.Seek(offset, io.SeekStart)
@@ -765,13 +747,8 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 	}
 
   in = readers.NewLimitedReadCloser(xrdfile, limit)
-  //fmt.Println("in = ",in)  //commentaire
-  //fmt.Printf("in  contenue = %q \n ", in)  //a retirer
-  //fmt.Printf("in  type = %t \n ", in)  //a retirer
 	return in, nil
 }
-
-
 
 
 
@@ -781,24 +758,23 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 // it also updates the info field
 func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction object setModtime \n")
+    fmt.Println("Utilisation de la fonction object setModtime  ")
   }
 
   client,path,err :=o.fs.xrdremote(o.path(),ctx)
   if err != nil{
-    return err
+    return errors.Wrap(err, "SetModTime")
   }
   defer client.Close()
 
   err = os.Chtimes(path, modTime, modTime)
   if err != nil {
-		return err
+		return errors.Wrap(err, "SetModTime failed")
 	}
-  err = o.stat()
+  err = o.stat(ctx)
 	if err != nil {
 		return errors.Wrap(err, "SetModTime stat failed")
 	}
-  //fmt.Println("setModTime time=",o.modTime," modTIme =", modTime," object=",o.path())
 	return nil
 }
 
@@ -806,7 +782,7 @@ func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
 // Storable returns a boolean showing if this object is storable
 func (o *Object) Storable() bool {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction object Storable \n")
+    fmt.Println("Utilisation de la fonction object Storable  ")
   }
 
 	return o.mode.IsRegular()
@@ -816,8 +792,10 @@ func (o *Object) Storable() bool {
 // Update the object from in with modTime and size
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (err error) {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction object update \n")
+    fmt.Println("Utilisation de la fonction object update ctx= ",ctx)
   }
+
+  o.hashes = nil
 
   err = os.MkdirAll(filepath.Dir(o.path()), 0755)
 
@@ -848,12 +826,11 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
     }
 	}
 
-  _, err = io.CopyBuffer(out, in, make([]byte, 16*1024*1024))
+  _, err = io.CopyBuffer(out, in, make([]byte, maxSizeForCopy))
 
 	if err != nil {
     remove()
     return errors.Wrap(err, "update: could not copy to output file")
-//  fmt.Printf("copy ok? \n")  //commentaire
 	}
 
   err = out.Close()
@@ -875,7 +852,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 // Remove a remote xrootd file object
 func (o *Object) Remove(ctx context.Context) error {
   if titre_fonction == true{
-    fmt.Printf("Utilisation de la fonction object remove ")
+    fmt.Println("Utilisation de la fonction object remove ")
   }
   //xrddir := path.Join(f.root, dir)
   client,path,err :=o.fs.xrdremote(o.path(),ctx)
@@ -898,8 +875,10 @@ func (o *Object) Remove(ctx context.Context) error {
 
 
 
+// Check the interfaces are satisfied
 var (
     _ fs.Fs          = &Fs{}
+    _ fs.PutStreamer    = &Fs{}
   	_ fs.Mover       = &Fs{}
   	_ fs.DirMover    = &Fs{}
   	_ fs.Object      = &Object{}
