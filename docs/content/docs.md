@@ -55,6 +55,7 @@ See the following for detailed instructions for
   * [Tardigrade](/tardigrade/)
   * [Union](/union/)
   * [WebDAV](/webdav/)
+  * [XrootD](/xrootd/)
   * [Yandex Disk](/yandex/)
   * [The local filesystem](/local/)
 
