@@ -209,11 +209,15 @@ func (f *Fs) Features() *fs.Features {
 
 
 // Hashes returns the supported hash sets.
-func (f *Fs) Hashes() hash.Set {
+
+/*func (f *Fs) Hashes() hash.Set {
 	return hash.Set(hash.SHA1)
+}*/
+
+
+func (f *Fs) Hashes() hash.Set {
+	return hash.Supported()
 }
-
-
 
 // NewObject finds the Object at remote.  If it can't be found
 //
@@ -401,6 +405,37 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 
   return nil
 }
+
+
+
+// Purge deletes all the files and directories
+//
+// Optional interface: Only implement this if you have a way of
+// deleting all the files quicker than just running Remove() on the
+// result of List()
+func (f *Fs) Purge(ctx context.Context) error {
+  if titre_fonction == true{
+    fmt.Println("Utilisation de la fonction fs Purge  ")
+  }
+
+  client,path,err := f.xrdremote(f.root,ctx)
+  if err != nil{
+    return err
+  }
+  defer client.Close()
+
+  err = client.FS().RemoveAll(ctx, path);
+  if  err != nil {
+      return err
+  }
+
+  err = client.Close();
+  if  err != nil {
+      return err
+  }
+  return nil
+}
+
 
 // Move renames a remote xrootd file object
 //
@@ -877,10 +912,9 @@ func (o *Object) Remove(ctx context.Context) error {
 
 // Check the interfaces are satisfied
 var (
-    _ fs.Fs          = &Fs{}
-    _ fs.PutStreamer    = &Fs{}
+	_ fs.Fs          = &Fs{}
+	_ fs.PutStreamer    = &Fs{}
   	_ fs.Mover       = &Fs{}
   	_ fs.DirMover    = &Fs{}
   	_ fs.Object      = &Object{}
 )
-
