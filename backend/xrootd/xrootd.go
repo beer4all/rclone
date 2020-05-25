@@ -5,7 +5,7 @@ package xrootd
 import(
   "context"
   "time"
-	"io"
+  "io"
   "os"
   "path"
   "path/filepath"
