@@ -356,8 +356,8 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
   }
   defer client.Close()
 
-  err = os.MkdirAll(path, 0755)
-
+  //err = client.FS().MkdirAll(ctx,path,xrdfs.OpenModeOwnerRead|xrdfs.OpenModeOwnerWrite)
+  err = client.FS().MkdirAll(ctx,path,755)
   if err != nil {
     return err
   }
@@ -546,7 +546,6 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
   }
   defer client.Close()
 
-  fmt.Println(" DirMove : srcPath =",srcPath," dstPath:",dstPath)
   // Check if destination exists
   ok, err = f.dirExists(ctx,path)
   if ok {
@@ -556,7 +555,9 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
   // Make sure the parent directory exists
 
 
-	err = os.MkdirAll(filepath.Dir(path), 0755)
+	//err = os.MkdirAll(filepath.Dir(path), 0755)
+  //err = client.FS().MkdirAll(ctx,filepath.Dir(path),xrdfs.OpenModeOwnerRead|xrdfs.OpenModeOwnerWrite)
+  err = client.FS().MkdirAll(ctx,filepath.Dir(path),755)
 	if err != nil {
 		return errors.Wrap(err, "DirMove mkParentDir dst failed")
 	}
@@ -758,11 +759,44 @@ func (o *Object) Hash(ctx context.Context, r hash.Type) (string, error) {
 
 // path returns the native path of the object
 func (o *Object) path() string {
-  return o.fs.url+ "/"+ o.remote
+  if filepath.Base(o.fs.url) != o.remote{
+    return o.fs.url+ "/"+ o.remote
+  }
+  return o.fs.url
 }
 
 
 
+
+// object that is read
+type xrdOpenFile struct {
+	o    *Object           // object that is open
+//  in   io.ReadCloser     // handle we are wrapping
+  xrdfile *xrdio.File          // file object reference
+//  hash *hash.MultiHasher // currently accumulating hashes
+}
+
+func newObjectReader(o *Object, xrdfile *xrdio.File) *xrdOpenFile {
+  file := &xrdOpenFile{
+		o:    o,
+		xrdfile:   xrdfile,
+	}
+	return file
+}
+
+// Read bytes from the object - see io.Reader
+func (file *xrdOpenFile) Read(p []byte) (n int, err error) {
+	n, err = file.xrdfile.ReadAt(p,0)
+	return n,err
+}
+
+
+
+// Close the object
+func (file *xrdOpenFile) Close() (err error) {
+	err = file.xrdfile.Close()
+	return err
+}
 
 
 // Open an object for read
@@ -798,7 +832,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 		}
 	}
 
-  in = readers.NewLimitedReadCloser(xrdfile, limit)
+   in = readers.NewLimitedReadCloser(newObjectReader(o , xrdfile), limit)
 	return in, nil
 }
 
@@ -813,7 +847,7 @@ func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
     fmt.Println("Using the object setModtime function ")
   }
 
-  client,path,err :=o.fs.xrdremote(o.path(),ctx)
+  /*client,path,err :=o.fs.xrdremote(o.path(),ctx)
   if err != nil{
     return errors.Wrap(err, "SetModTime")
   }
@@ -822,8 +856,8 @@ func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
   err = os.Chtimes(path, modTime, modTime)
   if err != nil {
 		return errors.Wrap(err, "SetModTime failed")
-	}
-  err = o.stat(ctx)
+	}*/
+  err := o.stat(ctx)
 	if err != nil {
 		return errors.Wrap(err, "SetModTime stat failed")
 	}
@@ -855,10 +889,11 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
   }
   defer client.Close()
 
-  err = os.MkdirAll(filepath.Dir(path), 0755)
-
-
-  out, err := os.Create(path)
+  //err = os.MkdirAll(filepath.Dir(path), 0755)
+  //err = client.FS().MkdirAll(ctx,filepath.Dir(path),xrdfs.OpenModeOwnerRead|xrdfs.OpenModeOwnerWrite)
+  err = client.FS().MkdirAll(ctx,filepath.Dir(path),755)
+  file,err := client.FS().Open(ctx,path, 0755, xrdfs.OpenOptionsOpenUpdate|xrdfs.OpenOptionsNew)
+  //out, err := os.Create(path)
   if err != nil {
 		return err
 	}
@@ -884,14 +919,22 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
     }
 	}
 
-  _, err = io.CopyBuffer(out, in, make([]byte, maxSizeForCopy))
+
+
+  data := make([]byte, maxSizeForCopy)
+  n, err := in.Read(data)
+  if err != nil {
+    return errors.Wrap(err, "update: could not read data")
+  }
+  data = data[:n]
+  _,err = file.WriteAt(data,0)
 
 	if err != nil {
     remove()
     return errors.Wrap(err, "update: could not copy to output file")
 	}
 
-  err = out.Close()
+  err = file.Close(ctx)
   if err != nil {
     remove()
     return errors.Wrap(err,"could not close output file")
