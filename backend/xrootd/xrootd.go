@@ -842,7 +842,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 // SetModTime sets the modification and access time to the specified time
 //
 // it also updates the info field
-func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
+func (o *Object) SetModTime(ctx context.Context,modTime  time.Time) error {
   if titre_fonction == true{
     fmt.Println("Using the object setModtime function ")
   }
@@ -857,6 +857,7 @@ func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
   if err != nil {
 		return errors.Wrap(err, "SetModTime failed")
 	}*/
+
   err := o.stat(ctx)
 	if err != nil {
 		return errors.Wrap(err, "SetModTime stat failed")
@@ -882,6 +883,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
   }
 
   o.hashes = nil
+  size := src.Size()
 
   client,path,removeErr :=o.fs.xrdremote(o.path(),ctx)
   if removeErr != nil{
@@ -891,9 +893,8 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
   //err = os.MkdirAll(filepath.Dir(path), 0755)
   //err = client.FS().MkdirAll(ctx,filepath.Dir(path),xrdfs.OpenModeOwnerRead|xrdfs.OpenModeOwnerWrite)
-  err = client.FS().MkdirAll(ctx,filepath.Dir(path),755)
-  file,err := client.FS().Open(ctx,path, 0755, xrdfs.OpenOptionsOpenUpdate|xrdfs.OpenOptionsNew)
-  //out, err := os.Create(path)
+  err = client.FS().MkdirAll(ctx, filepath.Dir(path), 755)
+  file,err := client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsNew)
   if err != nil {
 		return err
 	}
@@ -921,8 +922,9 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 
 
-  data := make([]byte, maxSizeForCopy)
+  data := make([]byte, size)
   n, err := in.Read(data)
+
   if err != nil {
     return errors.Wrap(err, "update: could not read data")
   }
