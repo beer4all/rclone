@@ -65,7 +65,7 @@ type Options struct {
 	Port              string `config:"port"`
 	Path_to_file      string `config:"path_to_file"`
 	//Pass            string `config:"pass"`
-	/AskPassword      bool   `config:"ask_password"`
+	//AskPassword      bool   `config:"ask_password"`
 }
 
 
