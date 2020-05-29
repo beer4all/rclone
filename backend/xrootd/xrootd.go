@@ -5,7 +5,7 @@ package xrootd
 import(
   "context"
   "time"
-	"io"
+  "io"
   "os"
   "path"
   "path/filepath"
@@ -883,7 +883,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
   }
 
   o.hashes = nil
-  size := src.Size()
+  //size := src.Size()
 
   client,path,removeErr :=o.fs.xrdremote(o.path(),ctx)
   if removeErr != nil{
@@ -921,20 +921,33 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	}
 
 
-
-  data := make([]byte, size)
-  n, err := in.Read(data)
-
-  if err != nil {
+  const bufsize int64 = 1024*1024
+  data := make([]byte, bufsize)
+  var  err_read, err_write error
+  var  index int64 = 0
+  var  n int
+  for { 
+  n, err_read = in.Read(data)
+  //if err == io.EOF {
+  //                 file.WriteAt(data[:n], index)
+  //                 break
+  //}
+  if ((err_read != nil) && (err_read != io.EOF)) {
     return errors.Wrap(err, "update: could not read data")
   }
   data = data[:n]
-  _,err = file.WriteAt(data,0)
+  _,err_write = file.WriteAt(data, index)
+   if err_write != nil {
+     remove()
+     return errors.Wrap(err_write, "update: could not copy to output file")
+   }
+   
+   if err_read == io.EOF {
+     break
+   }
 
-	if err != nil {
-    remove()
-    return errors.Wrap(err, "update: could not copy to output file")
-	}
+   index += int64(n)
+ }
 
   err = file.Close(ctx)
   if err != nil {
