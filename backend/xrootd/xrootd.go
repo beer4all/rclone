@@ -40,19 +40,19 @@ var (
 
 // Register with Fs
 func init(){
-  fsi :=&fs.RegInfo{
+    fsi :=&fs.RegInfo{
     Name:        "xrootd",
     Description: "xrootd-client",
     NewFs:       NewFs,
 
     Options: []fs.Option{{
-      Name: "servername",
-      Help: "xrootd servername (default 'localhost') ",
-      Required: true,
+        Name: "servername",
+        Help: "xrootd servername (default 'localhost') ",
+        Required: true,
       }, {
-    		Name: "port",
-    		Help: "Xrootd port, leave blank to use default (1094)",
-    }, {
+        Name: "port",
+      	Help: "Xrootd port, leave blank to use default (1094)",
+      }, {
         Name: "path_to_file",
         Help: "Xrootd root path, example (/tmp) and default '/'",
       }},
@@ -65,11 +65,8 @@ func init(){
 
 
 type Options struct {
-
-	Host              string `config:"host"`
 	Servername        string `config:"servername"`
 	Port              string `config:"port"`
-  //Path_xroot        string `config:"path_xroot"`
   Path_to_file      string `config:"path_to_file"`
   //Pass              string `config:"pass"`
   //AskPassword       bool   `config:"ask_password"`
@@ -78,30 +75,28 @@ type Options struct {
 
 
 type Fs struct {
-  name         string                // name of this remote
-	root         string                // the path we are working on
-	opt          Options               // parsed options
-  //m            configmap.Mapper // config
-  url          string
-  features     *fs.Features          // optional features
-  objectHashesMu sync.Mutex // global lock for Object.hashes
+  name            string                // name of this remote
+  root            string                // the path we are working on
+  opt             Options               // parsed options
+  //m             configmap.Mapper // config
+  url             string
+  features        *fs.Features          // optional features
+  objectHashesMu  sync.Mutex // global lock for Object.hashes
 }
 
 
 type Object struct {
-	fs            *Fs           // what this object is part of
+  fs            *Fs           // what this object is part of
   remote        string       // The remote path
-	size          int64       // size of the object
-	modTime       time.Time   // modification time of the object if known
+  size          int64       // size of the object
+  modTime       time.Time   // modification time of the object if known
   mode          os.FileMode
-//  sha1          string    // SHA-1 of the object content
-  hashes         map[hash.Type]string // Hashes
+  hashes        map[hash.Type]string // Hashes
 }
 
 
 // Open a new connection to the xrootd server.
 func (f *Fs) xrdremote(name string, ctx context.Context) (client *xrootd.Client, path string, err error) {
-
   url, err := xrdio.Parse(name)
 	if err != nil {
 		return nil, "", fmt.Errorf("could not parse %q: %w", name, err)
@@ -116,10 +111,7 @@ func (f *Fs) xrdremote(name string, ctx context.Context) (client *xrootd.Client,
 // NewFs creates a new Fs object from the name and root. It connects to
 // the host specified in the config file.
 func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
-  if titre_fonction == true{
-    fmt.Println("Using the newfs function ")
-  }
-
+  fs.Debugf(name,"Using the newfs function")
   ctx := context.Background()
 
 	// Parse config into Options struct
@@ -129,7 +121,6 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 		return nil, err
 	}
 
-  fmt.Println("opt.Servername =",opt.Servername)
 	if opt.Servername == "" {
 		opt.Servername = "localhost"
 	}
@@ -145,13 +136,12 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 
   url := "root://" + opt.Servername + ":" + opt.Port + "/" + opt.Path_to_file +"/" + root
 
-    f := &Fs{
+  f := &Fs{
     name:      name,
     root:      root,
     opt:       *opt,
     //m:         m,
     url:       url,
-  //pacer:       fs.NewPacer(pacer.NewDefault(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
   }
 
 
@@ -172,12 +162,11 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 		f.root = filepath.Dir(path)
 		if f.root == "." {
 			f.root = ""
-		}
+    }
 		_, err := f.NewObject(ctx, remote)
 		if err != nil {
 			if err == fs.ErrorObjectNotFound || errors.Cause(err) == fs.ErrorNotAFile {
 				// File doesn't exist so return old f
-
 				f.root = path
 				return f, nil
 			}
@@ -202,13 +191,6 @@ func (f *Fs) Features() *fs.Features {
 }
 
 
-// Hashes returns the supported hash sets.
-
-/*func (f *Fs) Hashes() hash.Set {
-	return hash.Set(hash.SHA1)
-}*/
-
-
 func (f *Fs) Hashes() hash.Set {
 	return hash.Supported()
 }
@@ -217,9 +199,7 @@ func (f *Fs) Hashes() hash.Set {
 //
 // it returns the error fs.ErrorObjectNotFound.
 func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
-  if titre_fonction == true{
-    fmt.Println("Using the fs NewObject function ")
-  }
+  fs.Debugf(f, "Using the fs NewObject function with remote: %s", remote)
 	o := &Object{
 		fs:     f,
 		remote: remote,
@@ -236,9 +216,7 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 
 // setMetadata sets the file info from the os.FileInfo passed in
 func (o *Object) setMetadata(info os.FileInfo) {
-  if titre_fonction == true{
-    fmt.Println("Using the object setMetadata function ")
-  }
+  fs.Debugf(o,"Using the object setMetadata function with FileInfo: %v", info)
   if o.size != info.Size() {
 		o.size = info.Size()
 	}
@@ -253,12 +231,9 @@ func (o *Object) setMetadata(info os.FileInfo) {
 
 //Continuation of the List function
 func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, info os.FileInfo, dir string ) (entries fs.DirEntries, err error) {
-  if titre_fonction == true{
-    fmt.Println("Using the display function ")
-  }
+  fs.Debugf(f,"Using the fs display function with xrdfs.FileSystem: %v, root: %v ,info: %v and dir= %v", fsx, root, info, dir)
 
   dirt := path.Join(root, info.Name())
-
 	ents, err := fsx.Dirlist(ctx, dirt)
 
 	if err != nil {
@@ -276,7 +251,6 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, inf
 				fs:     f,
 				remote: remote,
 			}
-
 			o.setMetadata(info)
 			entries = append(entries, o)
 		}
@@ -286,7 +260,7 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, inf
 }
 
 
-// List the objects and directories in dir into entries.  The
+// List the objects and directories in dir into entries. The
 // entries can be returned in any order but should be for a
 // complete directory.
 //
@@ -297,11 +271,7 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, inf
 // found.
 
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
-  if titre_fonction == true{
-    fmt.Println("Using the fs list function ")
-  }
-
-  //fs.Debugf(src, "Can't move - not same remote type")
+  fs.Debugf(f,"Using the fs list function with directory: %s", dir)
 
   xrddir := f.url+ "/"+ dir
 
@@ -320,7 +290,8 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 
 
   if err != nil {
-		return nil, fs.ErrorDirNotFound  //errors.Wrap(err," could not stat" + url.Path )
+    fs.Debugf(f,"List :dir not found with path= %v ", path)
+		return nil, fs.ErrorDirNotFound
 	}
   entries,err = f.display(ctx, fsx, path, fi, dir )
   if  err != nil {
@@ -339,9 +310,8 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 
 // Mkdir creates the directory if it doesn't exist
 func (f *Fs) Mkdir(ctx context.Context, dir string) error {
-  if titre_fonction == true{
-    fmt.Println("Using the fs mkdir function ")
-  }
+  fs.Debugf(f,"Using the fs Mkdir function with directory: %s", dir)
+
   xrddir := f.url+ "/"+ dir
   client,path,err :=f.xrdremote(xrddir,ctx)
   if err != nil{
@@ -349,7 +319,6 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
   }
   defer client.Close()
 
-  //err = client.FS().MkdirAll(ctx,path,xrdfs.OpenModeOwnerRead|xrdfs.OpenModeOwnerWrite)
   err = client.FS().MkdirAll(ctx,path,755)
   if err != nil {
     return err
@@ -367,9 +336,7 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 //
 // Returns an error if it isn't empty
 func (f *Fs) Rmdir(ctx context.Context, dir string) error {
-  if titre_fonction == true{
-    fmt.Println("Using the fs rmdir function ")
-  }
+  fs.Debugf(f,"Using the fs Rmdir function with directory: %s", dir)
 
 	// Check to see if directory is empty
 	entries, err := f.List(ctx, dir)
@@ -410,9 +377,7 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 // deleting all the files quicker than just running Remove() on the
 // result of List()
 func (f *Fs) Purge(ctx context.Context) error {
-  if titre_fonction == true{
-    fmt.Println("Using the fs Purge function ")
-  }
+  fs.Debugf(f,"Using the fs Purge function")
 
   client,path,err := f.xrdremote(f.root,ctx)
   if err != nil{
@@ -437,12 +402,9 @@ func (f *Fs) Purge(ctx context.Context) error {
 //
 // It returns the destination Object and a possible error
 func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object, error) {
-  if titre_fonction == true{
-    fmt.Println("Using the fs Move function ")
-  }
+  fs.Debugf(f,"Using the fs Move function with src: %v and remote: %s", src,remote)
 
   srcObj, ok := src.(*Object)
-
 
   if !ok {
 		fs.Debugf(src, "Can't move - not same remote type")
@@ -518,9 +480,7 @@ func (f *Fs) dirExists(ctx context.Context, dir string) (bool, error) {
 //
 // If destination exists then return fs.ErrorDirExists
 func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string) error {
-  if titre_fonction == true{
-    fmt.Println("Using the fs DirMove function ")
-  }
+  fs.Debugf(f,"Using the fs DirMove function with src: %v, srcRemote: %s and dstRemote: %s", src, srcRemote, dstRemote)
 
   srcFs, ok := src.(*Fs)
 	if !ok {
@@ -546,10 +506,6 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
   }
 
   // Make sure the parent directory exists
-
-
-	//err = os.MkdirAll(filepath.Dir(path), 0755)
-  //err = client.FS().MkdirAll(ctx,filepath.Dir(path),xrdfs.OpenModeOwnerRead|xrdfs.OpenModeOwnerWrite)
   err = client.FS().MkdirAll(ctx,filepath.Dir(path),755)
 	if err != nil {
 		return errors.Wrap(err, "DirMove mkParentDir dst failed")
@@ -576,9 +532,7 @@ func (f *Fs) Precision() time.Duration {
 
 // Put data from <in> into a new remote xrootd file object described by <src.Remote()> and <src.ModTime(ctx)>
 func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
-  if titre_fonction == true{
-    fmt.Println("Using the fs put function ")
-  }
+  fs.Debugf(f,"Using the fs Put function with in: %v and srcRemote: %v", in, src)
 
   o := &Object{
 		fs:     f,
@@ -613,9 +567,8 @@ func (f *Fs) String() string {
 
 // statRemote stats the file or directory at the remote given
 func (f *Fs) stat(ctx context.Context, remote string) (info os.FileInfo, err error) {
-  if titre_fonction == true{
-    fmt.Println("Using the fs stat function ")
-  }
+  fs.Debugf(f,"Using the fs stat function with remote: %s", remote)
+
   xrddir := f.url
   if filepath.Base(f.url) != remote{
     xrddir = f.url+ "/"+ remote
@@ -644,15 +597,12 @@ func (f *Fs) stat(ctx context.Context, remote string) (info os.FileInfo, err err
 
 // stat updates the info in the Object
 func (o *Object) stat(ctx context.Context) error {
-  if titre_fonction == true{
-    fmt.Println("Using the object stat function ")
-  }
+  fs.Debugf(o,"Using the Object stat function")
 	info, err := o.fs.stat(ctx, o.remote)
 
 	if err != nil {
 
 		//if os.IsNotExist(err) {
-    //   fmt.Printf("appel fct stat 2 \n")
 	  //	return fs.ErrorObjectNotFound
     //}
 		//return errors.Wrap(err, "stat failed")
@@ -705,9 +655,9 @@ func (o *Object) Fs() fs.Info {
 
 // Hash returns the requested hash of a file as a lowercase hex string
 func (o *Object) Hash(ctx context.Context, r hash.Type) (string, error) {
-	// Check that the underlying file hasn't changed
+  fs.Debugf(o,"Using the object Hash function with hash: %q", r)
+  // Check that the underlying file hasn't changed
 	oldtime := o.modTime
-
 	oldsize := o.size
 
 	err := o.stat(ctx)
@@ -764,9 +714,7 @@ func (o *Object) path() string {
 // object that is read
 type xrdOpenFile struct {
 	o    *Object           // object that is open
-//  in   io.ReadCloser     // handle we are wrapping
   xrdfile *xrdio.File          // file object reference
-//  hash *hash.MultiHasher // currently accumulating hashes
 }
 
 func newObjectReader(o *Object, xrdfile *xrdio.File) *xrdOpenFile {
@@ -794,9 +742,7 @@ func (file *xrdOpenFile) Close() (err error) {
 
 // Open an object for read
 func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
-  if titre_fonction == true{
-    fmt.Println("Using the object open function ")
-  }
+  fs.Debugf(o,"Using the object Open function")
 
   var offset, limit int64 = 0, -1
 	for _, option := range options {
@@ -835,10 +781,8 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 // SetModTime sets the modification and access time to the specified time
 //
 // it also updates the info field
-func (o *Object) SetModTime(ctx context.Context,modTime  time.Time) error {
-  if titre_fonction == true{
-    fmt.Println("Using the object setModtime function ")
-  }
+func (o *Object) SetModTime(ctx context.Context,modTime time.Time) error {
+  fs.Debugf(o,"Using the object SetModTime function with modTime: %v", modTime)
 
   /*client,path,err :=o.fs.xrdremote(o.path(),ctx)
   if err != nil{
@@ -861,19 +805,13 @@ func (o *Object) SetModTime(ctx context.Context,modTime  time.Time) error {
 
 // Storable returns a boolean showing if this object is storable
 func (o *Object) Storable() bool {
-  if titre_fonction == true{
-    fmt.Println("Using the object Storable function ")
-  }
-
 	return o.mode.IsRegular()
 }
 
 
 // Update the object from in with modTime and size
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (err error) {
-  if titre_fonction == true{
-    fmt.Println("Using the object update function")
-  }
+  fs.Debugf(o,"Using the object Update function with in: %v",in)
 
   o.hashes = nil
   size := src.Size()
@@ -884,8 +822,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
   }
   defer client.Close()
 
-  //err = os.MkdirAll(filepath.Dir(path), 0755)
-  //err = client.FS().MkdirAll(ctx,filepath.Dir(path),xrdfs.OpenModeOwnerRead|xrdfs.OpenModeOwnerWrite)
   err = client.FS().MkdirAll(ctx, filepath.Dir(path), 755)
   file,err := client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsNew)
   if err != nil {
@@ -893,7 +829,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	}
 
   // remove the file if upload failed
-
 	remove := func() {
     client,path,removeErr :=o.fs.xrdremote(o.path(),ctx)
     if removeErr != nil{
@@ -947,10 +882,8 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 // Remove a remote xrootd file object
 func (o *Object) Remove(ctx context.Context) error {
-  if titre_fonction == true{
-    fmt.Println("Using the object remove function ")
-  }
-  //xrddir := f.url+ "/"+ dir
+  fs.Debugf(o,"Using the object Remove function")
+
   client,path,err :=o.fs.xrdremote(o.path(),ctx)
   if err != nil{
     return err
@@ -974,7 +907,7 @@ func (o *Object) Remove(ctx context.Context) error {
 // Check the interfaces are satisfied
 var (
     _ fs.Fs          = &Fs{}
-    _ fs.PutStreamer    = &Fs{}
+    _ fs.PutStreamer = &Fs{}
   	_ fs.Mover       = &Fs{}
   	_ fs.DirMover    = &Fs{}
   	_ fs.Object      = &Object{}
