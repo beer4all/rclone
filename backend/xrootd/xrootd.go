@@ -5,7 +5,7 @@ package xrootd
 import(
   "context"
   "time"
-  "io"
+	"io"
   "os"
   "path"
   "path/filepath"
@@ -31,7 +31,6 @@ import(
 // Constants
 const (
   titre_fonction = false
-  maxSizeForCopy = 5 * 1024 * 1024  // The maximum size of object we can COPY
 )
 
 
@@ -47,17 +46,13 @@ func init(){
     NewFs:       NewFs,
 
     Options: []fs.Option{{
-    Name:     "path_xroot",
-    Help:     "xrootd host to connect to (probably 'root' )",
-    Required: true,
-
-    }, {
-  			Name: "user",
-  			Help: "xrootd username (default 'localhost') ",
+      Name: "servername",
+      Help: "xrootd servername (default 'localhost') ",
+      Required: true,
       }, {
     		Name: "port",
     		Help: "Xrootd port, leave blank to use default (1094)",
-      }, {
+    }, {
         Name: "path_to_file",
         Help: "Xrootd root path, example (/tmp) and default '/'",
       }},
@@ -72,9 +67,9 @@ func init(){
 type Options struct {
 
 	Host              string `config:"host"`
-	User              string `config:"user"`
+	Servername        string `config:"servername"`
 	Port              string `config:"port"`
-  Path_xroot        string `config:"path_xroot"`
+  //Path_xroot        string `config:"path_xroot"`
   Path_to_file      string `config:"path_to_file"`
   //Pass              string `config:"pass"`
   //AskPassword       bool   `config:"ask_password"`
@@ -134,23 +129,21 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 		return nil, err
 	}
 
-  if opt.Path_xroot == "" {
-		opt.Path_xroot = "root"
+  fmt.Println("opt.Servername =",opt.Servername)
+	if opt.Servername == "" {
+		opt.Servername = "localhost"
 	}
 
   if opt.Port == "" {
 		opt.Port = "1094"
 	}
 
-	if opt.User == "" {
-		opt.User = "localhost"
-	}
 
   if opt.Path_to_file == "" {
 		opt.Path_to_file = "/"
 	}
 
-  url := opt.Path_xroot + "://" + opt.User + ":" + opt.Port + "/" + opt.Path_to_file +"/" + root
+  url := "root://" + opt.Servername + ":" + opt.Port + "/" + opt.Path_to_file +"/" + root
 
     f := &Fs{
     name:      name,
@@ -883,7 +876,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
   }
 
   o.hashes = nil
-  //size := src.Size()
+  size := src.Size()
 
   client,path,removeErr :=o.fs.xrdremote(o.path(),ctx)
   if removeErr != nil{
@@ -921,33 +914,20 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	}
 
 
-  const bufsize int64 = 1024*1024
-  data := make([]byte, bufsize)
-  var  err_read, err_write error
-  var  index int64 = 0
-  var  n int
-  for { 
-  n, err_read = in.Read(data)
-  //if err == io.EOF {
-  //                 file.WriteAt(data[:n], index)
-  //                 break
-  //}
-  if ((err_read != nil) && (err_read != io.EOF)) {
+
+  data := make([]byte, size)
+  n, err := in.Read(data)
+
+  if err != nil {
     return errors.Wrap(err, "update: could not read data")
   }
   data = data[:n]
-  _,err_write = file.WriteAt(data, index)
-   if err_write != nil {
-     remove()
-     return errors.Wrap(err_write, "update: could not copy to output file")
-   }
-   
-   if err_read == io.EOF {
-     break
-   }
+  _,err = file.WriteAt(data,0)
 
-   index += int64(n)
- }
+	if err != nil {
+    remove()
+    return errors.Wrap(err, "update: could not copy to output file")
+	}
 
   err = file.Close(ctx)
   if err != nil {
