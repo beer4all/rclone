@@ -572,7 +572,7 @@ func (f *Fs) stat(ctx context.Context, remote string) (info os.FileInfo, err err
 	return nil, fmt.Errorf("could not stat %q: %w", path, err)
 	}
 	defer client.Close()
-	
+
 	fsx := client.FS()
 	info,err = fsx.Stat(ctx,path)
 	if  err != nil {
@@ -737,7 +737,7 @@ func (file *xrdOpenFile) Close() (err error) {
 func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
 	fs.Debugf(o,"Using the object Open function")
 	var offset, limit int64 = 0, -1
-	
+
 	for _, option := range options {
 		switch x := option.(type) {
 		case *fs.SeekOption:
@@ -806,7 +806,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	fs.Debugf(o,"Using the object Update function with in: %v",in)
 
 	o.hashes = nil
-	size := src.Size()
 
 	client,path,removeErr :=o.fs.xrdremote(o.path(),ctx)
 	if removeErr != nil{
@@ -831,45 +830,62 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 		if removeErr != nil {
 			fs.Debugf(src, "Failed to remove: %v", removeErr)
-		} else {
-			fs.Debugf(src, "Removed after failed upload: %v", err)
+			} else {
+				fs.Debugf(src, "Removed after failed upload: %v", err)
+			}
+			removeErr = client.Close();
+			if  removeErr != nil {
+				fs.Debugf(src, "Failed to close client ", removeErr)
+			}
 		}
-		removeErr = client.Close();
-		if  removeErr != nil {
-			fs.Debugf(src, "Failed to close client ", removeErr)
+
+
+
+		const bufsize int64 = 1024*1024
+		data := make([]byte, bufsize)
+		var  err_read error
+		var  index int64 = 0
+		var  n int
+
+		for {
+			n, err_read = in.Read(data)
+
+			if ((err_read != nil) && (err_read != io.EOF)) {
+				err = err_read
+				return errors.Wrap(err, "update: could not read data")
+			}
+			data = data[:n]
+
+			_,err = file.WriteAt(data, index)
+
+			if err != nil {
+				remove()
+				return errors.Wrap(err, "update: could not copy to output file")
+			}
+
+			if err_read == io.EOF {
+				// source has been read until End Of File
+				break
+			}
+
+			index += int64(n)
 		}
+
+
+		err = file.Close(ctx)
+		if err != nil {
+			remove()
+			return errors.Wrap(err,"could not close output file")
+		}
+
+
+		err = o.SetModTime(ctx, src.ModTime(ctx))
+		if err != nil {
+			return errors.Wrap(err, "Update: SetModTime failed")
+		}
+
+		return nil
 	}
-
-
-
-	data := make([]byte, size)
-	n, err := in.Read(data)
-
-	if err != nil {
-		return errors.Wrap(err, "update: could not read data")
-	}
-	data = data[:n]
-	_,err = file.WriteAt(data,0)
-
-	if err != nil {
-		remove()
-		return errors.Wrap(err, "update: could not copy to output file")
-	}
-
-	err = file.Close(ctx)
-	if err != nil {
-		remove()
-		return errors.Wrap(err,"could not close output file")
-	}
-
-
-	err = o.SetModTime(ctx, src.ModTime(ctx))
-	if err != nil {
-		return errors.Wrap(err, "Update: SetModTime failed")
-	}
-
-	return nil
-}
 
 
 // Remove a remote xrootd file object
@@ -904,4 +920,3 @@ var (
   	_ fs.DirMover    = &Fs{}
   	_ fs.Object      = &Object{}
 )
-
