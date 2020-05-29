@@ -36,24 +36,24 @@ var (
 
 // Register with Fs
 func init(){
-	    fsi :=&fs.RegInfo{
-	    Name:        "xrootd",
-	    Description: "xrootd-client",
-	    NewFs:       NewFs,
+	fsi :=&fs.RegInfo{
+		Name:        "xrootd",
+		Description: "xrootd-client",
+		NewFs:       NewFs,
 
-	    Options: []fs.Option{{
-		Name: "servername",
-		Help: "xrootd servername (default 'localhost') ",
-		Required: true,
-	      }, {
-		Name: "port",
-		Help: "Xrootd port, leave blank to use default (1094)",
-	      }, {
-		Name: "path_to_file",
-		Help: "Xrootd root path, example (/tmp) and default '/'",
-	      }},
-	    }
-	    fs.Register(fsi)
+		Options: []fs.Option{{
+			Name: "servername",
+			Help: "xrootd servername (default 'localhost') ",
+			Required: true,
+		}, {
+			Name: "port",
+			Help: "Xrootd port, leave blank to use default (1094)",
+		}, {
+			Name: "path_to_file",
+			Help: "Xrootd root path, example (/tmp) and default '/'",
+		}},
+	}
+	fs.Register(fsi)
 }
 
 
