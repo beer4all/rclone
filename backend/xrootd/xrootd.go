@@ -315,8 +315,10 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 
 	err = client.FS().MkdirAll(ctx,path,755)
 	if err != nil {
+    fs.Debugf(f,"failed Mkdir: %v", path)
 		return err
 	}
+  fs.Debugf(f,"Mkdir: %v", path)
 
 	err = client.Close();
 	if  err != nil {
@@ -352,9 +354,10 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 
 	err = client.FS().RemoveDir(ctx, path)
 	if  err != nil {
+    fs.Debugf(f,"Failed Remove directory: %v", path)
 		return err
 	}
-
+  fs.Debugf(f,"Remove directory: %v", path)
 	err = client.Close();
 	if  err != nil {
 		return err
@@ -381,8 +384,10 @@ func (f *Fs) Purge(ctx context.Context) error {
 
 	err = client.FS().RemoveAll(ctx, path);
 	if  err != nil {
+    fs.Debugf(f,"Failed Remove All: %v", path)
 		return err
 	}
+  fs.Debugf(f,"Remove All: %v", path)
 
 	err = client.Close();
 	if  err != nil {
@@ -408,7 +413,7 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object,
 	xrddst := f.url+ "/"+ remote
 
 	//Source path
-	client,pathsrc,err :=f.xrdremote(srcObj.path(),ctx)
+	client,pathsrc,err := f.xrdremote(srcObj.path(),ctx)
 	if err != nil{
 		return nil, errors.Wrap(err, "Move")
 	}
@@ -423,13 +428,16 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object,
 
 	err = client.FS().Rename(ctx, pathsrc, pathdst);
 	if err != nil {
+    fs.Debugf(f,"failed Move: %v -> %v", pathsrc, pathdst)
 		return nil, errors.Wrap(err, "Move Rename failed")
 	}
+
 
 	dstObj, err := f.NewObject(ctx, remote)
 	if err != nil {
 		return nil, errors.Wrap(err, "Move NewObject failed")
 	}
+  fs.Debugf(f,"Move: %v -> %v", pathsrc, pathdst)
 
 	err = client.Close();
 	if  err != nil {
@@ -500,13 +508,17 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
   // Make sure the parent directory exists
   err = client.FS().MkdirAll(ctx,filepath.Dir(path),755)
 	if err != nil {
+    fs.Debugf(f,"Failed Mkdir: %v", filepath.Dir(path))
 		return errors.Wrap(err, "DirMove mkParentDir dst failed")
 	}
+  fs.Debugf(f,"Mkdir: %v", filepath.Dir(path))
 
 	err = client.FS().Rename(ctx, srcPath , path);
 	if err != nil {
+    fs.Debugf(f,"Failed directory Move: %v -> %v",srcPath, path)
 		return errors.Wrapf(err, "DirMove Rename(%q,%q) failed", srcPath, dstPath)
 	}
+  fs.Debugf(f,"Directory Move: %v->%v",srcPath, path)
 
 	err = client.Close();
 	if  err != nil {
@@ -668,6 +680,7 @@ func (o *Object) Hash(ctx context.Context, r hash.Type) (string, error) {
 
       in, err = xrdio.Open(o.path())
       if err!= nil{
+
         return "", errors.Wrap(err, "Hash open failed")
       }
 
@@ -711,6 +724,7 @@ type xrdOpenFile struct {
 }
 
 func newObjectReader(o *Object, xrdfile *xrdio.File) *xrdOpenFile {
+  fs.Debugf(xrdfile,"Using newObjectReader function")
 	file := &xrdOpenFile{
 		o:    o,
 		xrdfile:   xrdfile,
@@ -720,6 +734,7 @@ func newObjectReader(o *Object, xrdfile *xrdio.File) *xrdOpenFile {
 
 // Read bytes from the object - see io.Reader
 func (file *xrdOpenFile) Read(p []byte) (n int, err error) {
+  fs.Debugf(file,"Using Read function")
 	n, err = file.xrdfile.ReadAt(p,0)
 	return n,err
 }
@@ -728,6 +743,7 @@ func (file *xrdOpenFile) Read(p []byte) (n int, err error) {
 
 // Close the object
 func (file *xrdOpenFile) Close() (err error) {
+  fs.Debugf(file,"Using Close function")
 	err = file.xrdfile.Close()
 	return err
 }
@@ -753,8 +769,10 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 
 	xrdfile, err := xrdio.Open(o.path())
 	if err!= nil{
+    fs.Debugf(o,"failed Open file: %v", o.path())
 		return nil, errors.Wrap(err, "Open failed")
 	}
+  fs.Debugf(o,"Open file: %v", o.path())
 
 	if offset > 0 {
 		off, err := xrdfile.Seek(offset, io.SeekStart)
@@ -814,6 +832,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	defer client.Close()
 
 	err = client.FS().MkdirAll(ctx, filepath.Dir(path), 755)
+
 	file,err := client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsNew)
 	if err != nil {
 		return err
@@ -849,7 +868,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 		for {
 			n, err_read = in.Read(data)
-
 			if ((err_read != nil) && (err_read != io.EOF)) {
 				err = err_read
 				return errors.Wrap(err, "update: could not read data")
@@ -869,6 +887,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 			}
 
 			index += int64(n)
+
 		}
 
 
@@ -900,8 +919,10 @@ func (o *Object) Remove(ctx context.Context) error {
 
 	err = client.FS().RemoveFile(ctx, path);
 	if  err != nil {
+    fs.Debugf(o,"Failed remove File: %v",path)
 		return err
 	}
+  fs.Debugf(o,"Remove File: %v",path)
 
 	err = client.Close();
 	if  err != nil {
@@ -920,3 +941,4 @@ var (
   	_ fs.DirMover    = &Fs{}
   	_ fs.Object      = &Object{}
 )
+
