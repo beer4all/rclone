@@ -721,6 +721,8 @@ func (o *Object) path() string {
 type xrdOpenFile struct {
 	o    *Object           // object that is open
 	xrdfile *xrdio.File          // file object reference
+	bytes int64
+	eof   bool
 }
 
 func newObjectReader(o *Object, xrdfile *xrdio.File) *xrdOpenFile {
@@ -728,14 +730,20 @@ func newObjectReader(o *Object, xrdfile *xrdio.File) *xrdOpenFile {
 	file := &xrdOpenFile{
 		o:    o,
 		xrdfile:   xrdfile,
+		bytes: 0,
+	//	eof: false,
 	}
 	return file
 }
 
 // Read bytes from the object - see io.Reader
 func (file *xrdOpenFile) Read(p []byte) (n int, err error) {
-  fs.Debugf(file,"Using Read function")
-	n, err = file.xrdfile.ReadAt(p,0)
+  fs.Debugf(file,"Using Read function %v",file.o)
+	n, err = file.xrdfile.Read(p)
+	file.bytes += int64(n)
+	if err == io.EOF {
+		file.eof = true
+	}
 	return n,err
 }
 
@@ -744,7 +752,19 @@ func (file *xrdOpenFile) Read(p []byte) (n int, err error) {
 // Close the object
 func (file *xrdOpenFile) Close() (err error) {
   fs.Debugf(file,"Using Close function")
+
+	if file.eof {
+	  fs.Debugf(file,"end of file reached")
+	}else{
+		fs.Debugf(file,"end of file isn't reached")
+	}
 	err = file.xrdfile.Close()
+
+	// Check to see we read the correct number of bytes
+	if file.o.Size() != file.bytes {
+		return errors.Errorf("object corrupted on transfer - length mismatch (want %d got %d)", file.o.Size(), file.bytes)
+	}
+
 	return err
 }
 
