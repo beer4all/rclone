@@ -575,9 +575,8 @@ func (f *Fs) stat(ctx context.Context, remote string) (info os.FileInfo, err err
 
 	xrddir := f.url
 	if filepath.Base(f.url) != remote{
-	xrddir = f.url+ "/"+ remote
+	  xrddir = f.url+ "/"+ remote
 	}
-
 
 	client,path,err :=f.xrdremote(xrddir,ctx)
 	if err != nil{
@@ -731,7 +730,7 @@ func newObjectReader(o *Object, xrdfile *xrdio.File) *xrdOpenFile {
 		o:    o,
 		xrdfile:   xrdfile,
 		bytes: 0,
-	//	eof: false,
+		eof: false,
 	}
 	return file
 }
@@ -739,6 +738,7 @@ func newObjectReader(o *Object, xrdfile *xrdio.File) *xrdOpenFile {
 // Read bytes from the object - see io.Reader
 func (file *xrdOpenFile) Read(p []byte) (n int, err error) {
   fs.Debugf(file,"Using Read function %v",file.o)
+	//n, err = file.xrdfile.ReadAt(p,file.bytes)
 	n, err = file.xrdfile.Read(p)
 	file.bytes += int64(n)
 	if err == io.EOF {
@@ -818,12 +818,14 @@ func (o *Object) SetModTime(ctx context.Context,modTime time.Time) error {
 	if err != nil{
 		return errors.Wrap(err, "SetModTime")
 	}
-	defer client.Close()
+	defer client.Close()*/
 
-	err = os.Chtimes(path, modTime, modTime)
+	o.modTime = modTime
+/*	err = os.Chtimes(path, modTime, modTime)
 	if err != nil {
 		return errors.Wrap(err, "SetModTime failed")
 	}*/
+
 
 	err := o.stat(ctx)
 	if err != nil {
@@ -851,11 +853,16 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	}
 	defer client.Close()
 
-	err = client.FS().MkdirAll(ctx, filepath.Dir(path), 755)
+/*	err = client.FS().MkdirAll(ctx, filepath.Dir(path), 755)*/
 
-	file,err := client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsNew)
+	file,err := client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsNew|xrdfs.OpenOptionsMkPath)
 	if err != nil {
-		return err
+		fs.Debugf(src, "Failed to open new file", err)
+		file,err = client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsOpenUpdate|xrdfs.OpenOptionsMkPath)
+		if err != nil {
+			fs.Debugf(src, "Failed to open an existing file", err)
+			return err
+		}
 	}
 
 	// remove the file if upload failed
@@ -924,7 +931,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		}
 
 		return nil
-	}
+}
 
 
 // Remove a remote xrootd file object
