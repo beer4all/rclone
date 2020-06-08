@@ -912,15 +912,14 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 				return errors.Wrap(err, "update: could not copy to output file")
 			}
 
+			index += int64(n)
+
 			if err_read == io.EOF {
 				// source has been read until End Of File
 				break
 			}
-
-			index += int64(n)
-
 		}
-		index += int64(n)
+
 		fs.Debugf(src, "Update: src size %v vs copy size %v", src.Size(), index)
 
 		err = file.Close(ctx)
