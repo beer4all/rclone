@@ -213,14 +213,18 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 func (o *Object) setMetadata(info os.FileInfo) {
 	fs.Debugf(o,"Using the object setMetadata function with FileInfo: %v", info)
 	if o.size != info.Size() {
+		fs.Debugf(o,"setMetadata modified size: %v -> %v",o.size, info.Size())
 		o.size = info.Size()
 	}
 	if !o.modTime.Equal(info.ModTime()) {
+		fs.Debugf(o,"setMetadata modified ModTime: %v -> %v",o.modTime, info.ModTime())
 		o.modTime = info.ModTime()
 	}
 	if o.mode != info.Mode() {
+		fs.Debugf(o,"setMetadata modified Mode: %v -> %v",o.mode, info.Mode())
 		o.mode = info.Mode()
 	}
+		fs.Debugf(o,"setMetadata size: %v , modTime: %v, mode: %v", o.size, o.modTime, o.mode)
 }
 
 
@@ -544,7 +548,6 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 	}
 	err := o.Update(ctx, in, src, options...)
 	if err != nil {
-
 		return nil, err
 	}
 	return o, nil
@@ -571,7 +574,7 @@ func (f *Fs) String() string {
 
 // statRemote stats the file or directory at the remote given
 func (f *Fs) stat(ctx context.Context, remote string) (info os.FileInfo, err error) {
-	fs.Debugf(f,"Using the fs stat function with remote: %s", remote)
+	fs.Debugf(f,"Using the fs stat function with remote: %s ", remote)
 
 	xrddir := f.url
 	if filepath.Base(f.url) != remote{
@@ -589,7 +592,7 @@ func (f *Fs) stat(ctx context.Context, remote string) (info os.FileInfo, err err
 	if  err != nil {
 		return info,err
 	}
-
+	fs.Debugf(f,"Stat : %v", info)
 	err = client.Close();
 	if  err != nil {
 		return info,err
@@ -701,6 +704,7 @@ func (o *Object) Hash(ctx context.Context, r hash.Type) (string, error) {
   		}
   		o.fs.objectHashesMu.Unlock()
 	}
+
 	return hashValue, nil
 }
 
@@ -738,7 +742,6 @@ func newObjectReader(o *Object, xrdfile *xrdio.File) *xrdOpenFile {
 // Read bytes from the object - see io.Reader
 func (file *xrdOpenFile) Read(p []byte) (n int, err error) {
   fs.Debugf(file,"Using Read function %v",file.o)
-	//n, err = file.xrdfile.ReadAt(p,file.bytes)
 	n, err = file.xrdfile.Read(p)
 	file.bytes += int64(n)
 	if err == io.EOF {
@@ -843,7 +846,7 @@ func (o *Object) Storable() bool {
 
 // Update the object from in with modTime and size
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (err error) {
-	fs.Debugf(o,"Using the object Update function with in: %v",in)
+	fs.Debugf(o,"Using the object Update function with in: %v", in)
 
 	o.hashes = nil
 
@@ -858,7 +861,8 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	file,err := client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsNew|xrdfs.OpenOptionsMkPath)
 	if err != nil {
 		fs.Debugf(src, "Failed to open new file", err)
-		file,err = client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsOpenUpdate|xrdfs.OpenOptionsMkPath)
+		//the file may already exist, attempt to open it
+		file,err = client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsOpenUpdate|xrdfs.OpenOptionsMkPath|xrdfs.OpenOptionsDelete)
 		if err != nil {
 			fs.Debugf(src, "Failed to open an existing file", err)
 			return err
@@ -916,14 +920,14 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 			index += int64(n)
 
 		}
-
+		index += int64(n)
+		fs.Debugf(src, "Update: src size %v vs copy size %v", src.Size(), index)
 
 		err = file.Close(ctx)
 		if err != nil {
 			remove()
 			return errors.Wrap(err,"could not close output file")
 		}
-
 
 		err = o.SetModTime(ctx, src.ModTime(ctx))
 		if err != nil {
