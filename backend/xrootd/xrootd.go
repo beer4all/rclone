@@ -891,11 +891,12 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 
 
-		const bufsize int64 = 1024*1024
+		const bufsize int64 = 5000
 		data := make([]byte, bufsize)
 		var  err_read error
 		var  index int64 = 0
 		var  n int
+		var  turn int64 = 0  //number of turns
 
 		for {
 			n, err_read = in.Read(data)
@@ -913,13 +914,14 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 			}
 
 			index += int64(n)
-
+			turn += 1
 			if err_read == io.EOF {
 				// source has been read until End Of File
 				break
 			}
 		}
 
+		fs.Debugf(src, "avg buff size= %d", index / turn )
 		fs.Debugf(src, "Update: src size %v vs copy size %v", src.Size(), index)
 
 		err = file.Close(ctx)
