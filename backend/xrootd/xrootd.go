@@ -890,7 +890,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 
 
-		const bufsize int64 = 16*1024*1024
+		const bufsize int64 = 1024*1024
 		data := make([]byte, bufsize)
 		var  err_read error
 		var  index int64 = 0
