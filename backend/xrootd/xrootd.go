@@ -847,7 +847,6 @@ func (o *Object) Storable() bool {
 // Update the object from in with modTime and size
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (err error) {
 	fs.Debugf(o,"Using the object Update function with in: %v", in)
-
 	o.hashes = nil
 
 	client,path,removeErr :=o.fs.xrdremote(o.path(),ctx)
@@ -891,7 +890,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 
 
-		const bufsize int64 = 5000
+		const bufsize int64 = 16*1024*1024
 		data := make([]byte, bufsize)
 		var  err_read error
 		var  index int64 = 0
@@ -904,9 +903,8 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 				err = err_read
 				return errors.Wrap(err, "update: could not read data")
 			}
-			data = data[:n]
 
-			_,err = file.WriteAt(data, index)
+			_,err = file.WriteAt(data[:n], index)
 
 			if err != nil {
 				remove()
@@ -919,6 +917,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 				// source has been read until End Of File
 				break
 			}
+
 		}
 
 		fs.Debugf(src, "avg buff size= %d", index / turn )
