@@ -27,6 +27,7 @@ import(
 
 // Constants
 const (
+	defaultCopyBuffer = 1 * fs.MebiByte
 )
 
 
@@ -43,14 +44,21 @@ func init(){
 
 		Options: []fs.Option{{
 			Name: "servername",
-			Help: "xrootd servername (default 'localhost') ",
-			Required: true,
+			Help: "xrootd servername, leave blank to use default",
+			Default:"localhost",
 		}, {
 			Name: "port",
-			Help: "Xrootd port, leave blank to use default (1094)",
+			Help: "Xrootd port, leave blank to use default",
+			Default:"1094",
 		}, {
 			Name: "path_to_file",
-			Help: "Xrootd root path, example (/tmp) and default '/'",
+			Help: "Xrootd root path, example (/tmp)",
+			Default:"/",
+		}, {
+			Name: "size_copy_buffer",
+			Help: "Choose the size of the transfer buffer, leave blank to use default (1 MB by default)",
+			Default: defaultCopyBuffer,
+			Advanced: true,
 		}},
 	}
 	fs.Register(fsi)
@@ -64,6 +72,7 @@ type Options struct {
 	Servername        string `config:"servername"`
 	Port              string `config:"port"`
 	Path_to_file      string `config:"path_to_file"`
+	SizeCopyBuffer  fs.SizeSuffix  `size_copy_buffer`
 	//Pass            string `config:"pass"`
 	//AskPassword      bool   `config:"ask_password"`
 }
@@ -117,20 +126,9 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 		return nil, err
 	}
 
-	if opt.Servername == "" {
-		opt.Servername = "localhost"
-	}
-
-	if opt.Port == "" {
-		opt.Port = "1094"
-	}
-
-
-	if opt.Path_to_file == "" {
-		opt.Path_to_file = "/"
-	}
-
 	url := "root://" + opt.Servername + ":" + opt.Port + "/" + opt.Path_to_file +"/" + root
+
+	fs.Debugf(name,"Newfs Copy buffer size: %v, path: %v", int64(opt.SizeCopyBuffer),url)
 
 	f := &Fs{
 		name:      name,
@@ -889,8 +887,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		}
 
 
-
-		const bufsize int64 = 1024*1024
+		var bufsize int64 = int64(o.fs.opt.SizeCopyBuffer)
 		data := make([]byte, bufsize)
 		var  err_read error
 		var  index int64 = 0
