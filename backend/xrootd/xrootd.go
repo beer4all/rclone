@@ -27,7 +27,7 @@ import(
 
 // Constants
 const (
-	defaultCopyBuffer = 1 * fs.MebiByte
+	defaultCopyBufferKb = 1024
 )
 
 
@@ -55,9 +55,9 @@ func init(){
 			Help: "Xrootd root path, example (/tmp)",
 			Default:"/",
 		}, {
-			Name: "size_copy_buffer",
+			Name: "size_copy_buffer_kb",
 			Help: "Choose the size of the transfer buffer, leave blank to use default (1 MB by default)",
-			Default: defaultCopyBuffer,
+			Default: defaultCopyBufferKb,
 			Advanced: true,
 		}},
 	}
@@ -72,7 +72,7 @@ type Options struct {
 	Servername        string `config:"servername"`
 	Port              string `config:"port"`
 	Path_to_file      string `config:"path_to_file"`
-	SizeCopyBuffer  fs.SizeSuffix  `size_copy_buffer`
+	SizeCopyBufferKb  	int64  `size_copy_buffer_kb`
 	//Pass            string `config:"pass"`
 	//AskPassword      bool   `config:"ask_password"`
 }
@@ -128,7 +128,7 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 
 	url := "root://" + opt.Servername + ":" + opt.Port + "/" + opt.Path_to_file +"/" + root
 
-	fs.Debugf(name,"Newfs Copy buffer size: %v, path: %v", int64(opt.SizeCopyBuffer),url)
+	fs.Debugf(name,"Newfs Copy buffer size in KB: %v, path: %v", opt.SizeCopyBufferKb,url)
 
 	f := &Fs{
 		name:      name,
@@ -887,7 +887,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		}
 
 
-		var bufsize int64 = int64(o.fs.opt.SizeCopyBuffer)
+		var bufsize int64 =o.fs.opt.SizeCopyBufferKb * 1024
 		data := make([]byte, bufsize)
 		var  err_read error
 		var  index int64 = 0
