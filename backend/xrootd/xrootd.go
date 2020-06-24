@@ -11,11 +11,18 @@ import(
 	  "path/filepath"
 	  "fmt"
 	  "sync"
+		gohash "hash"
 
+		//xrootd
 	  "go-hep.org/x/hep/xrootd"
 	  "go-hep.org/x/hep/xrootd/xrdio"
 	  "go-hep.org/x/hep/xrootd/xrdfs"
+		"go-hep.org/x/hep/xrootd/xrdproto/query"
 
+		//hash adler32
+		"hash/adler32"
+
+		//rclone
 	  "github.com/pkg/errors"
 	  "github.com/rclone/rclone/fs"
 	  //"github.com/rclone/rclone/fs/config"
@@ -23,6 +30,8 @@ import(
 	  "github.com/rclone/rclone/fs/config/configstruct"
 	  "github.com/rclone/rclone/fs/hash"
 	  "github.com/rclone/rclone/lib/readers"
+
+
 )
 
 // Constants
@@ -33,10 +42,13 @@ const (
 
 // Globals
 var (
+	// Adler32HashType is the hash.Type for Dropbox
+	Adler32HashType hash.Type
 )
 
 // Register with Fs
 func init(){
+	Adler32HashType = hash.RegisterHash("Adler32Hash", 8, func() gohash.Hash { return adler32.New() })
 	fsi :=&fs.RegInfo{
 		Name:        "xrootd",
 		Description: "xrootd-client",
@@ -96,7 +108,8 @@ type Object struct {
 	size          int64       // size of the object
 	modTime       time.Time   // modification time of the object if known
 	mode          os.FileMode
-	hashes        map[hash.Type]string // Hashes
+	//hashes        map[hash.Type]string // Hashes
+	hash    string    // content_hash of the object
 }
 
 
@@ -183,10 +196,10 @@ func (f *Fs) Features() *fs.Features {
 	return f.features
 }
 
-
 func (f *Fs) Hashes() hash.Set {
-	return hash.Supported()
+	return hash.Set(Adler32HashType)
 }
+
 
 // NewObject finds the Object at remote.  If it can't be found
 //
@@ -581,7 +594,7 @@ func (f *Fs) stat(ctx context.Context, remote string) (info os.FileInfo, err err
 
 	client,path,err :=f.xrdremote(xrddir,ctx)
 	if err != nil{
-	return nil, fmt.Errorf("could not stat %q: %w", path, err)
+		return nil, fmt.Errorf("could not stat %q: %w", path, err)
 	}
 	defer client.Close()
 
@@ -659,52 +672,44 @@ func (o *Object) Fs() fs.Info {
 
 
 // Hash returns the requested hash of a file as a lowercase hex string
-func (o *Object) Hash(ctx context.Context, r hash.Type) (string, error) {
-	fs.Debugf(o,"Using the object Hash function with hash: %q", r)
-	// Check that the underlying file hasn't changed
-	oldtime := o.modTime
-	oldsize := o.size
+func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
+	fs.Debugf(o,"Using hash function with hash.Type= %v",t)
+	if t != Adler32HashType {
+		return "", hash.ErrUnsupported
+	}
 
-	err := o.stat(ctx)
+	// Retrieve the checksum of the file by asking the xrootd server
+	client,path,err := o.fs.xrdremote(o.path(),ctx)
 	if err != nil {
-		return "", errors.Wrap(err, "hash: failed to stat")
+		return "", err
 	}
 
-	o.fs.objectHashesMu.Lock()
-	hashes := o.hashes
-	hashValue, hashFound := o.hashes[r]
-	o.fs.objectHashesMu.Unlock()
-
-	if !o.modTime.Equal(oldtime) || oldsize != o.size || hashes == nil || !hashFound {
-		var in io.ReadCloser
-
-      in, err = xrdio.Open(o.path())
-      if err!= nil{
-
-        return "", errors.Wrap(err, "Hash open failed")
-      }
-
-  		hashes, err = hash.StreamTypes(in, hash.NewHashSet(r))
-  		closeErr := in.Close()
-  		if err != nil {
-  			return "", errors.Wrap(err, "hash: failed to read")
-  		}
-  		if closeErr != nil {
-  			return "", errors.Wrap(closeErr, "hash: failed to close")
-  		}
-
-  		hashValue = hashes[r]
-  		o.fs.objectHashesMu.Lock()
-  		if o.hashes == nil {
-  			o.hashes = hashes
-  		} else {
-  			o.hashes[r] = hashValue
-  		}
-  		o.fs.objectHashesMu.Unlock()
+	file, err := client.FS().Open(ctx, path, xrdfs.OpenModeOwnerRead, xrdfs.OpenOptionsOpenRead)
+	if err != nil {
+		return "", err
 	}
+	defer file.Close(ctx)
 
-	return hashValue, nil
+	fs.Debugf(o,"Hash:path= %v",path)
+
+  var (
+    resp query.Response
+    req = query.Request{
+      Query: query.Checksum,
+      Args:  []byte(path),
+    }
+  )
+
+  _, err = client.Send(ctx, &resp, &req)
+  if err != nil {
+		fs.Debugf(o,"Checksum request error", err)
+    return "",err
+  }
+	o.hash = string(resp.Data[8:16])  //Because resp.Data = "adler32 95ec3712\x00"
+	fs.Debugf(o,"Hash: o.Hash= %v && Data=%v",o.hash,string(resp.Data))
+	return o.hash, nil
 }
+
 
 
 // path returns the native path of the object
@@ -721,7 +726,7 @@ func (o *Object) path() string {
 // object that is read
 type xrdOpenFile struct {
 	o    *Object           // object that is open
-	xrdfile *xrdio.File          // file object reference
+	xrdfile *xrdio.File    // file object reference
 	bytes int64
 	eof   bool
 }
@@ -845,11 +850,12 @@ func (o *Object) Storable() bool {
 // Update the object from in with modTime and size
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (err error) {
 	fs.Debugf(o,"Using the object Update function with in: %v", in)
-	o.hashes = nil
+	o.hash = ""
 
-	client,path,removeErr :=o.fs.xrdremote(o.path(),ctx)
-	if removeErr != nil{
-		fs.Debugf(src, "Failed to open client", removeErr)
+	client,path,err :=o.fs.xrdremote(o.path(),ctx)
+	if err != nil{
+		fs.Debugf(src, "Failed to open client", err)
+		return err
 	}
 	defer client.Close()
 
@@ -871,22 +877,24 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		client,path,removeErr :=o.fs.xrdremote(o.path(),ctx)
 		if removeErr != nil{
 			fs.Debugf(src, "Failed to open client", removeErr)
+			return
 		}
 		defer client.Close()
 		removeErr = client.FS().RemoveFile(ctx, path);
 
-		if removeErr != nil {
-			fs.Debugf(src, "Failed to remove: %v", removeErr)
+			if removeErr != nil {
+				fs.Debugf(src, "Failed to remove: %v", removeErr)
 			} else {
 				fs.Debugf(src, "Removed after failed upload: %v", err)
 			}
 			removeErr = client.Close();
 			if  removeErr != nil {
 				fs.Debugf(src, "Failed to close client ", removeErr)
+				return
 			}
 		}
 
-
+		checksum := adler32.New()
 		var bufsize int64 =o.fs.opt.SizeCopyBufferKb * 1024
 		data := make([]byte, bufsize)
 		var  err_read error
@@ -908,6 +916,8 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 				return errors.Wrap(err, "update: could not copy to output file")
 			}
 
+			checksum.Write(data[:n])  //update checksum data
+
 			index += int64(n)
 			turn += 1
 			if err_read == io.EOF {
@@ -917,7 +927,11 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 		}
 
-		fs.Debugf(src, "avg buff size= %d", index / turn )
+
+		o.hash = fmt.Sprintf("%x", checksum.Sum32())  //h is int32
+		fs.Debugf(src,"Update: Checksum %x",checksum.Sum32())
+
+		fs.Debugf(src, "Update: avg buff size= %d", index / turn )
 		fs.Debugf(src, "Update: src size %v vs copy size %v", src.Size(), index)
 
 		err = file.Close(ctx)
@@ -965,8 +979,8 @@ func (o *Object) Remove(ctx context.Context) error {
 var (
 	_ fs.Fs          = &Fs{}
 	_ fs.PutStreamer = &Fs{}
-  	_ fs.Mover       = &Fs{}
-  	_ fs.DirMover    = &Fs{}
-  	_ fs.Object      = &Object{}
+	_ fs.Mover       = &Fs{}
+	_ fs.DirMover    = &Fs{}
+	_ fs.Object      = &Object{}
 )
 
