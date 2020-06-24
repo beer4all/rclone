@@ -42,7 +42,7 @@ const (
 
 // Globals
 var (
-	// Adler32HashType is the hash.Type for Dropbox
+	// Adler32HashType is the hash.Type for XrootD
 	Adler32HashType hash.Type
 )
 
@@ -108,7 +108,6 @@ type Object struct {
 	size          int64       // size of the object
 	modTime       time.Time   // modification time of the object if known
 	mode          os.FileMode
-	//hashes        map[hash.Type]string // Hashes
 	hash    string    // content_hash of the object
 }
 
@@ -196,6 +195,7 @@ func (f *Fs) Features() *fs.Features {
 	return f.features
 }
 
+// Hashes returns the supported hash sets.
 func (f *Fs) Hashes() hash.Set {
 	return hash.Set(Adler32HashType)
 }
@@ -671,7 +671,9 @@ func (o *Object) Fs() fs.Info {
 }
 
 
-// Hash returns the requested hash of a file as a lowercase hex string
+
+// Hash returns adler32 checksum of the file
+// If no checksum is available it returns ""
 func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 	fs.Debugf(o,"Using hash function with hash.Type= %v",t)
 	if t != Adler32HashType {
@@ -927,8 +929,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 		}
 
-
-		o.hash = fmt.Sprintf("%x", checksum.Sum32())  //h is int32
 		fs.Debugf(src,"Update: Checksum %x",checksum.Sum32())
 
 		fs.Debugf(src, "Update: avg buff size= %d", index / turn )
