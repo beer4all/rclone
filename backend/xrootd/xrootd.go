@@ -929,6 +929,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 		}
 
+		o.hash = fmt.Sprintf("%x", checksum.Sum32())  //checksum is int32
 		fs.Debugf(src,"Update: Checksum %x",checksum.Sum32())
 
 		fs.Debugf(src, "Update: avg buff size= %d", index / turn )
