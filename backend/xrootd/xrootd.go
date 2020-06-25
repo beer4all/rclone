@@ -152,11 +152,11 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 		CanHaveEmptyDirectories: true,
 	}).Fill(f)
 
-	cli, path, err := f.xrdremote(url, ctx)
+	client, path, err := f.xrdremote(url, ctx)
 	if err != nil {
 		return nil, errors.Wrap(err, "NewFs")
 	}
-	defer cli.Close()
+	defer client.Close()
 
 	if root != "" {
 		// Check to see if the root actually an existing file
@@ -176,6 +176,11 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 		}
 		// return an error with an fs which points to the parent
 		return f, fs.ErrorIsFile
+	}
+
+	err = client.Close()
+	if err != nil {
+		return f, err
 	}
 	return f, nil
 }
@@ -278,14 +283,14 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 	xrddir := f.url + "/" + dir
 
 	client, path, err := f.xrdremote(xrddir, ctx)
-	if path == "" {
-		path = "."
-	}
-
 	if err != nil {
 		return nil, fmt.Errorf("could not stat %q: %w", path, err)
 	}
 	defer client.Close()
+
+	if path == "" {
+		path = "."
+	}
 
 	fsx := client.FS()
 	fi, err := fsx.Stat(ctx, path)
@@ -417,8 +422,7 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object,
 	if err != nil {
 		return nil, errors.Wrap(err, "Move")
 	}
-	defer client.Close()
-
+	client.Close()
 	//Destination path
 	client, pathdst, err := f.xrdremote(xrddst, ctx)
 	if err != nil {
@@ -450,7 +454,6 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object,
 // it doesn't or false, err
 func (f *Fs) dirExists(ctx context.Context, dir string) (bool, error) {
 	client, path, err := f.xrdremote(dir, ctx)
-
 	if err != nil {
 		return false, fmt.Errorf("could not stat %q: %w", path, err)
 	}
@@ -655,6 +658,7 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer client.Close()
 
 	file, err := client.FS().Open(ctx, path, xrdfs.OpenModeOwnerRead, xrdfs.OpenOptionsOpenRead)
 	if err != nil {
@@ -677,9 +681,20 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 		fs.Debugf(o, "Checksum request error", err)
 		return "", err
 	}
-	//o.hash = string(resp.Data[8:16])  //Because resp.Data = "adler32 95ec3712\x00"
-	hashtmp := (strings.Split(string(resp.Data), " "))[1]
-	o.hash = (strings.Split(hashtmp, "\x00"))[0]
+	//resp.Data = "adler32 95ec3712\x00"
+	stringdata := (strings.Split(string(resp.Data), " "))
+	if stringdata[0] == "adler32" {
+		hash := (strings.Split(stringdata[1], "\x00"))[0]
+		if len(hash) == 8 {
+			o.hash = hash
+		}
+	}
+
+	err = client.Close()
+	if err != nil {
+		return o.hash, err
+	}
+
 	fs.Debugf(o, "Hash: o.Hash= %v && Data=%v", o.hash, string(resp.Data))
 	return o.hash, nil
 }
@@ -732,13 +747,16 @@ func (file *xrdOpenFile) Close() (err error) {
 		fs.Debugf(file, "end of file isn't reached")
 	}
 	err = file.xrdfile.Close()
+	if err != nil {
+		return err
+	}
 
 	// Check to see we read the correct number of bytes
 	if file.o.Size() != file.bytes {
 		return errors.Errorf("object corrupted on transfer - length mismatch (want %d got %d)", file.o.Size(), file.bytes)
 	}
 
-	return err
+	return nil
 }
 
 // Open an object for read
@@ -769,6 +787,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 	if offset > 0 {
 		off, err := xrdfile.Seek(offset, io.SeekStart)
 		if err != nil || off != offset {
+			xrdfile.Close()
 			return nil, errors.Wrap(err, "Open Seek failed")
 		}
 	}
@@ -831,6 +850,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 			return err
 		}
 	}
+	defer file.Close(ctx)
 
 	// remove the file if upload failed
 	remove := func() {
@@ -862,6 +882,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	var bufsize int64 = o.fs.opt.SizeCopyBufferKb * 1024
 	data := make([]byte, bufsize)
 	var err_read error
+	var err_write error
 	var index int64 = 0
 	var n int
 	var turn int64 = 0 //number of turns
@@ -870,14 +891,16 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		n, err_read = in.Read(data)
 		if (err_read != nil) && (err_read != io.EOF) {
 			err = err_read
-			return errors.Wrap(err, "update: could not read data")
+			fs.Debugf(src, "update: could not read data: error: %v", err_read)
+			break
 		}
 
-		_, err = file.WriteAt(data[:n], index)
+		_, err_write = file.WriteAt(data[:n], index)
 
-		if err != nil {
-			remove()
-			return errors.Wrap(err, "update: could not copy to output file")
+		if err_write != nil {
+			err = err_write
+			fs.Debugf(src, "update: could not copy to output file: error: %v", err_write)
+			break
 		}
 
 		if !o.fs.opt.DisableHashCheck {
@@ -886,11 +909,16 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 		index += int64(n)
 		turn += 1
+
 		if err_read == io.EOF {
 			// source has been read until End Of File
 			break
 		}
+	}
 
+	if err != nil {
+		remove()
+		return err
 	}
 
 	if !o.fs.opt.DisableHashCheck {
@@ -910,6 +938,11 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	err = o.SetModTime(ctx, src.ModTime(ctx))
 	if err != nil {
 		return errors.Wrap(err, "Update: SetModTime failed")
+	}
+
+	err = client.Close()
+	if err != nil {
+		return err
 	}
 
 	return nil
