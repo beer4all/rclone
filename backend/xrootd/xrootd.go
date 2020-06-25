@@ -12,6 +12,7 @@ import(
 	  "fmt"
 	  "sync"
 		gohash "hash"
+		"strings"
 
 		//xrootd
 	  "go-hep.org/x/hep/xrootd"
@@ -25,7 +26,6 @@ import(
 		//rclone
 	  "github.com/pkg/errors"
 	  "github.com/rclone/rclone/fs"
-	  //"github.com/rclone/rclone/fs/config"
 	  "github.com/rclone/rclone/fs/config/configmap"
 	  "github.com/rclone/rclone/fs/config/configstruct"
 	  "github.com/rclone/rclone/fs/hash"
@@ -71,6 +71,16 @@ func init(){
 			Help: "Choose the size of the transfer buffer, leave blank to use default (1 MB by default)",
 			Default: defaultCopyBufferKb,
 			Advanced: true,
+		}, {
+			Name:     "disable_hashcheck",
+			Default:  false,
+			Advanced: true,
+			Help:     "What should copy do if file checksum is mismatched or invalid",
+			Examples: []fs.OptionExample{{
+				Value: "true",
+			}, {
+				Value: "false",
+			}},
 		}},
 	}
 	fs.Register(fsi)
@@ -84,7 +94,8 @@ type Options struct {
 	Servername        string `config:"servername"`
 	Port              string `config:"port"`
 	Path_to_file      string `config:"path_to_file"`
-	SizeCopyBufferKb  	int64  `size_copy_buffer_kb`
+	SizeCopyBufferKb  int64  `size_copy_buffer_kb`
+	DisableHashCheck         bool   `config:"disable_hashcheck"`
 	//Pass            string `config:"pass"`
 	//AskPassword      bool   `config:"ask_password"`
 }
@@ -197,6 +208,9 @@ func (f *Fs) Features() *fs.Features {
 
 // Hashes returns the supported hash sets.
 func (f *Fs) Hashes() hash.Set {
+	if f.opt.DisableHashCheck {
+		return hash.Set(hash.None)
+	}
 	return hash.Set(Adler32HashType)
 }
 
@@ -676,6 +690,11 @@ func (o *Object) Fs() fs.Info {
 // If no checksum is available it returns ""
 func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 	fs.Debugf(o,"Using hash function with hash.Type= %v",t)
+
+	if o.fs.opt.DisableHashCheck {
+		return "", nil
+	}
+
 	if t != Adler32HashType {
 		return "", hash.ErrUnsupported
 	}
@@ -707,7 +726,9 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 		fs.Debugf(o,"Checksum request error", err)
     return "",err
   }
-	o.hash = string(resp.Data[8:16])  //Because resp.Data = "adler32 95ec3712\x00"
+	//o.hash = string(resp.Data[8:16])  //Because resp.Data = "adler32 95ec3712\x00"
+	hashtmp := (strings.Split( string(resp.Data), " "))[1]
+	o.hash = (strings.Split( hashtmp, "\x00"))[0]
 	fs.Debugf(o,"Hash: o.Hash= %v && Data=%v",o.hash,string(resp.Data))
 	return o.hash, nil
 }
@@ -896,7 +917,11 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 			}
 		}
 
-		checksum := adler32.New()
+		//var checksum *adler32.digest
+	//	if o.fs.opt.DisableHashCheck{
+			checksum := adler32.New()
+	//	}
+
 		var bufsize int64 =o.fs.opt.SizeCopyBufferKb * 1024
 		data := make([]byte, bufsize)
 		var  err_read error
@@ -918,7 +943,9 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 				return errors.Wrap(err, "update: could not copy to output file")
 			}
 
-			checksum.Write(data[:n])  //update checksum data
+			if !o.fs.opt.DisableHashCheck{
+				checksum.Write(data[:n])  //update checksum data
+			}
 
 			index += int64(n)
 			turn += 1
@@ -929,8 +956,10 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 		}
 
-		o.hash = fmt.Sprintf("%x", checksum.Sum32())  //checksum is int32
-		fs.Debugf(src,"Update: Checksum %x",checksum.Sum32())
+		if !o.fs.opt.DisableHashCheck{
+			o.hash = fmt.Sprintf("%x", checksum.Sum32())  //checksum is int32
+			fs.Debugf(src,"Update: Checksum %x",checksum.Sum32())
+		}
 
 		fs.Debugf(src, "Update: avg buff size= %d", index / turn )
 		fs.Debugf(src, "Update: src size %v vs copy size %v", src.Size(), index)
@@ -980,8 +1009,8 @@ func (o *Object) Remove(ctx context.Context) error {
 var (
 	_ fs.Fs          = &Fs{}
 	_ fs.PutStreamer = &Fs{}
-	_ fs.Mover       = &Fs{}
+  _ fs.Mover       = &Fs{}
 	_ fs.DirMover    = &Fs{}
-	_ fs.Object      = &Object{}
+  _ fs.Object      = &Object{}
 )
 
