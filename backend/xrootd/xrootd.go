@@ -64,20 +64,22 @@ func init() {
 			Help:    "Xrootd root path, example (/tmp)",
 			Default: "/",
 		}, {
+			Name:    "hash_chosen",
+			Default: "adler32",
+			Help:    "Choice of type of checksum:",
+			Examples: []fs.OptionExample{{
+				Value: "adler32",
+			}, {
+				/*	Value: "md5",
+					}, {*/
+				Value: "none",
+				Help:  "no Checksum",
+			}},
+		}, {
 			Name:     "size_copy_buffer_kb",
 			Help:     "Choose the size of the transfer buffer, leave blank to use default (1 MB by default)",
 			Default:  defaultCopyBufferKb,
 			Advanced: true,
-		}, {
-			Name:     "disable_hashcheck",
-			Default:  false,
-			Advanced: true,
-			Help:     "What should copy do if file checksum is mismatched or invalid",
-			Examples: []fs.OptionExample{{
-				Value: "true",
-			}, {
-				Value: "false",
-			}},
 		}},
 	}
 	fs.Register(fsi)
@@ -88,7 +90,7 @@ type Options struct {
 	Port             string `config:"port"`
 	Path_to_file     string `config:"path_to_file"`
 	SizeCopyBufferKb int64  `size_copy_buffer_kb`
-	DisableHashCheck bool   `config:"disable_hashcheck"`
+	HashChosen       string `config:"hash_chosen"`
 	//Pass            string `config:"pass"`
 	//AskPassword      bool   `config:"ask_password"`
 }
@@ -197,10 +199,11 @@ func (f *Fs) Features() *fs.Features {
 
 // Hashes returns the supported hash sets.
 func (f *Fs) Hashes() hash.Set {
-	if f.opt.DisableHashCheck {
-		return hash.Set(hash.None)
+	if f.opt.HashChosen == "adler32" { // use adler32 checksum
+		return hash.Set(Adler32HashType)
 	}
-	return hash.Set(Adler32HashType)
+
+	return hash.Set(hash.None)
 }
 
 // NewObject finds the Object at remote.  If it can't be found
@@ -645,7 +648,7 @@ func (o *Object) Fs() fs.Info {
 func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 	fs.Debugf(o, "Using hash function with hash.Type= %v", t)
 
-	if o.fs.opt.DisableHashCheck {
+	if o.fs.opt.HashChosen == "none" {
 		return "", nil
 	}
 
@@ -681,21 +684,24 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 		fs.Debugf(o, "Checksum request error", err)
 		return "", err
 	}
-	//resp.Data = "adler32 95ec3712\x00"
+	fs.Debugf(o, "Hash: Data=%v", string(resp.Data)) // sup
+
 	stringdata := (strings.Split(string(resp.Data), " "))
-	if stringdata[0] == "adler32" {
+
+	//resp.Data = "adler32 95ec3712\x00"
+	if stringdata[0] == "adler32" && t == Adler32HashType {
 		hash := (strings.Split(stringdata[1], "\x00"))[0]
 		if len(hash) == 8 {
 			o.hash = hash
 		}
 	}
+	fs.Debugf(o, "Hash: o.Hash= %v && Data=%v", o.hash, string(resp.Data))
 
 	err = client.Close()
 	if err != nil {
 		return o.hash, err
 	}
 
-	fs.Debugf(o, "Hash: o.Hash= %v && Data=%v", o.hash, string(resp.Data))
 	return o.hash, nil
 }
 
@@ -844,7 +850,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	if err != nil {
 		fs.Debugf(src, "Failed to open new file", err)
 		//the file may already exist, attempt to open it
-		file, err = client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsOpenUpdate|xrdfs.OpenOptionsMkPath|xrdfs.OpenOptionsDelete)
+		file, err = client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsMkPath|xrdfs.OpenOptionsDelete)
 		if err != nil {
 			fs.Debugf(src, "Failed to open an existing file", err)
 			return err
@@ -874,10 +880,10 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		}
 	}
 
-	//var checksum *adler32.digest
-	//	if o.fs.opt.DisableHashCheck{
-	checksum := adler32.New()
-	//	}
+	var checksum gohash.Hash
+	if o.fs.opt.HashChosen == "adler32" {
+		checksum = adler32.New()
+	}
 
 	var bufsize int64 = o.fs.opt.SizeCopyBufferKb * 1024
 	data := make([]byte, bufsize)
@@ -903,7 +909,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 			break
 		}
 
-		if !o.fs.opt.DisableHashCheck {
+		if o.fs.opt.HashChosen == "adler32" {
 			checksum.Write(data[:n]) //update checksum data
 		}
 
@@ -921,9 +927,9 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		return err
 	}
 
-	if !o.fs.opt.DisableHashCheck {
-		o.hash = fmt.Sprintf("%x", checksum.Sum32()) //checksum is int32
-		fs.Debugf(src, "Update: Checksum %x", checksum.Sum32())
+	if o.fs.opt.HashChosen == "adler32" {
+		o.hash = fmt.Sprintf("%x", checksum) //checksum is int32
+		fs.Debugf(src, "Update: Checksum %x & %v", checksum, o.hash)
 	}
 
 	fs.Debugf(src, "Update: avg buff size= %d", index/turn)
