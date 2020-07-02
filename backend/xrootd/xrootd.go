@@ -70,8 +70,8 @@ func init() {
 			Examples: []fs.OptionExample{{
 				Value: "adler32",
 			}, {
-				/*	Value: "md5",
-					}, {*/
+				/*Value: "md5",
+				}, {*/
 				Value: "none",
 				Help:  "no Checksum",
 			}},
@@ -695,6 +695,7 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 			o.hash = hash
 		}
 	}
+
 	fs.Debugf(o, "Hash: o.Hash= %v && Data=%v", o.hash, string(resp.Data))
 
 	err = client.Close()
@@ -734,11 +735,16 @@ func newObjectReader(o *Object, xrdfile *xrdio.File) *xrdOpenFile {
 
 // Read bytes from the object - see io.Reader
 func (file *xrdOpenFile) Read(p []byte) (n int, err error) {
-	fs.Debugf(file, "Using Read function %v", file.o)
+	//fs.Debugf(file, "Using Read function %v", file.o)
 	n, err = file.xrdfile.Read(p)
 	file.bytes += int64(n)
-	if err == io.EOF {
-		file.eof = true
+	if err != nil {
+		if err == io.EOF {
+			file.eof = true
+		} else {
+			fs.Debugf(file, "err during read : %v", err)
+			return n, err
+		}
 	}
 	return n, err
 }
@@ -757,9 +763,9 @@ func (file *xrdOpenFile) Close() (err error) {
 		return err
 	}
 
-	// Check to see we read the correct number of bytes
+	//Check to see we read the correct number of bytes
 	if file.o.Size() != file.bytes {
-		return errors.Errorf("object corrupted on transfer - length mismatch (want %d got %d)", file.o.Size(), file.bytes)
+		fs.Debugf(file, "The whole file was not read - length mismatch (want %d got %d)", file.o.Size(), file.bytes)
 	}
 
 	return nil
@@ -844,8 +850,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	}
 	defer client.Close()
 
-	/*	err = client.FS().MkdirAll(ctx, filepath.Dir(path), 755)*/
-
 	file, err := client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsNew|xrdfs.OpenOptionsMkPath)
 	if err != nil {
 		fs.Debugf(src, "Failed to open new file", err)
@@ -880,11 +884,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		}
 	}
 
-	var checksum gohash.Hash
-	if o.fs.opt.HashChosen == "adler32" {
-		checksum = adler32.New()
-	}
-
 	var bufsize int64 = o.fs.opt.SizeCopyBufferKb * 1024
 	data := make([]byte, bufsize)
 	var err_read error
@@ -909,10 +908,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 			break
 		}
 
-		if o.fs.opt.HashChosen == "adler32" {
-			checksum.Write(data[:n]) //update checksum data
-		}
-
 		index += int64(n)
 		turn += 1
 
@@ -925,11 +920,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	if err != nil {
 		remove()
 		return err
-	}
-
-	if o.fs.opt.HashChosen == "adler32" {
-		o.hash = fmt.Sprintf("%x", checksum) //checksum is int32
-		fs.Debugf(src, "Update: Checksum %x & %v", checksum, o.hash)
 	}
 
 	fs.Debugf(src, "Update: avg buff size= %d", index/turn)
