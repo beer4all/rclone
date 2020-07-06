@@ -64,16 +64,16 @@ func init() {
 			Help:    "Xrootd root path, example (/tmp)",
 			Default: "/",
 		}, {
-			Name:    "hash_chosen",
-			Default: "adler32",
-			Help:    "Choice of type of checksum:",
+			Name:     "hash_chosen",
+			Default:  "adler32",
+			Help:     "Choice of type of checksum:",
 			Examples: []fs.OptionExample{{
 				Value: "adler32",
 			}, {
 				/*Value: "md5",
-				}, {*/
+			}, {*/
 				Value: "none",
-				Help:  "no Checksum",
+				Help: "no Checksum",
 			}},
 		}, {
 			Name:     "size_copy_buffer_kb",
@@ -90,7 +90,7 @@ type Options struct {
 	Port             string `config:"port"`
 	Path_to_file     string `config:"path_to_file"`
 	SizeCopyBufferKb int64  `size_copy_buffer_kb`
-	HashChosen       string `config:"hash_chosen"`
+	HashChosen			 string `config:"hash_chosen"`
 	//Pass            string `config:"pass"`
 	//AskPassword      bool   `config:"ask_password"`
 }
@@ -111,7 +111,7 @@ type Object struct {
 	size    int64     // size of the object
 	modTime time.Time // modification time of the object if known
 	mode    os.FileMode
-	hash    string // content_hash of the object
+	hash    string 		// content_hash of the object
 }
 
 // Open a new connection to the xrootd server.
@@ -182,7 +182,7 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 
 	err = client.Close()
 	if err != nil {
-		return f, err
+		return f,err
 	}
 	return f, nil
 }
@@ -199,7 +199,7 @@ func (f *Fs) Features() *fs.Features {
 
 // Hashes returns the supported hash sets.
 func (f *Fs) Hashes() hash.Set {
-	if f.opt.HashChosen == "adler32" { // use adler32 checksum
+	if f.opt.HashChosen == "adler32" {		// use adler32 checksum
 		return hash.Set(Adler32HashType)
 	}
 
@@ -652,7 +652,7 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 		return "", nil
 	}
 
-	if t != Adler32HashType {
+	if (t != Adler32HashType) {
 		return "", hash.ErrUnsupported
 	}
 
@@ -662,12 +662,6 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 		return "", err
 	}
 	defer client.Close()
-
-	file, err := client.FS().Open(ctx, path, xrdfs.OpenModeOwnerRead, xrdfs.OpenOptionsOpenRead)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close(ctx)
 
 	fs.Debugf(o, "Hash:path= %v", path)
 
@@ -679,20 +673,21 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 		}
 	)
 
+	fs.Debugf(o,"send hash request")
 	_, err = client.Send(ctx, &resp, &req)
+
 	if err != nil {
 		fs.Debugf(o, "Checksum request error", err)
 		return "", err
 	}
-	fs.Debugf(o, "Hash: Data=%v", string(resp.Data)) // sup
 
 	stringdata := (strings.Split(string(resp.Data), " "))
 
 	//resp.Data = "adler32 95ec3712\x00"
-	if stringdata[0] == "adler32" && t == Adler32HashType {
-		hash := (strings.Split(stringdata[1], "\x00"))[0]
+	if (stringdata[0] == "adler32" && t == Adler32HashType){
+		hash :=(strings.Split(stringdata[1], "\x00"))[0]
 		if len(hash) == 8 {
-			o.hash = hash
+				o.hash = hash
 		}
 	}
 
@@ -702,6 +697,7 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 	if err != nil {
 		return o.hash, err
 	}
+
 
 	return o.hash, nil
 }
@@ -738,12 +734,12 @@ func (file *xrdOpenFile) Read(p []byte) (n int, err error) {
 	//fs.Debugf(file, "Using Read function %v", file.o)
 	n, err = file.xrdfile.Read(p)
 	file.bytes += int64(n)
-	if err != nil {
+	if err != nil{
 		if err == io.EOF {
 			file.eof = true
 		} else {
 			fs.Debugf(file, "err during read : %v", err)
-			return n, err
+			return n,err
 		}
 	}
 	return n, err
@@ -759,13 +755,13 @@ func (file *xrdOpenFile) Close() (err error) {
 		fs.Debugf(file, "end of file isn't reached")
 	}
 	err = file.xrdfile.Close()
-	if err != nil {
+	if err !=nil{
 		return err
 	}
 
 	//Check to see we read the correct number of bytes
 	if file.o.Size() != file.bytes {
-		fs.Debugf(file, "The whole file was not read - length mismatch (want %d got %d)", file.o.Size(), file.bytes)
+		fs.Debugf(file,"The whole file was not read - length mismatch (want %d got %d)", file.o.Size(), file.bytes)
 	}
 
 	return nil
@@ -838,6 +834,7 @@ func (o *Object) Storable() bool {
 	return o.mode.IsRegular()
 }
 
+
 // Update the object from in with modTime and size
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (err error) {
 	fs.Debugf(o, "Using the object Update function with in: %v", in)
@@ -850,10 +847,26 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	}
 	defer client.Close()
 
-	file, err := client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsNew|xrdfs.OpenOptionsMkPath)
-	if err != nil {
-		fs.Debugf(src, "Failed to open new file", err)
-		//the file may already exist, attempt to open it
+	var fileExists bool = false
+
+	//see if the file exists
+	info, err := client.FS().Stat(ctx, path)
+	if err == nil {
+		if !info.IsDir(){
+			fileExists = true
+		}
+	}
+
+	var file xrdfs.File
+
+	if !fileExists {
+		file, err = client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsNew|xrdfs.OpenOptionsMkPath)
+		if err != nil {
+			fs.Debugf(src, "Failed to open an existing file", err)
+			return err
+		}
+
+	} else {
 		file, err = client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsMkPath|xrdfs.OpenOptionsDelete)
 		if err != nil {
 			fs.Debugf(src, "Failed to open an existing file", err)
@@ -917,7 +930,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		}
 	}
 
-	if err != nil {
+	if (err != nil){
 		remove()
 		return err
 	}
@@ -976,3 +989,4 @@ var (
 	_ fs.DirMover    = &Fs{}
 	_ fs.Object      = &Object{}
 )
+
