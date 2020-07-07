@@ -8,6 +8,7 @@ import (
 	gohash "hash"
 	"io"
 	"os"
+	"os/user"
 	"path"
 	"path/filepath"
 	"strings"
@@ -39,6 +40,7 @@ const (
 
 // Globals
 var (
+	currentUser = readCurrentUser()
 	// Adler32HashType is the hash.Type for XrootD
 	Adler32HashType hash.Type
 )
@@ -63,6 +65,10 @@ func init() {
 			Name:    "path_to_file",
 			Help:    "Xrootd root path, example (/tmp)",
 			Default: "/",
+		}, {
+			Name:    "user",
+			Help:    "username",
+			Default: currentUser,
 		}, {
 			Name:    "hash_chosen",
 			Default: "adler32",
@@ -91,6 +97,7 @@ type Options struct {
 	Path_to_file     string `config:"path_to_file"`
 	SizeCopyBufferKb int64  `size_copy_buffer_kb`
 	HashChosen       string `config:"hash_chosen"`
+	User             string `config:"user"`
 	//Pass            string `config:"pass"`
 	//AskPassword      bool   `config:"ask_password"`
 }
@@ -121,8 +128,22 @@ func (f *Fs) xrdremote(name string, ctx context.Context) (client *xrootd.Client,
 		return nil, "", fmt.Errorf("could not parse %q: %w", name, err)
 	}
 	path = url.Path
-	client, err = xrootd.NewClient(ctx, url.Addr, url.User)
+	client, err = xrootd.NewClient(ctx, url.Addr, f.opt.User)
 	return client, path, err
+}
+
+// readCurrentUser finds the current user name or "" if not found
+func readCurrentUser() (userName string) {
+	usr, err := user.Current()
+	if err == nil {
+		return usr.Username
+	}
+	// Fall back to reading $USER then $LOGNAME
+	userName = os.Getenv("USER")
+	if userName != "" {
+		return userName
+	}
+	return os.Getenv("LOGNAME")
 }
 
 // NewFs creates a new Fs object from the name and root. It connects to
@@ -140,7 +161,8 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 
 	url := "root://" + opt.Servername + ":" + opt.Port + "/" + opt.Path_to_file + "/" + root
 
-	fs.Debugf(name, "Newfs Copy buffer size in KB: %v, path: %v", opt.SizeCopyBufferKb, url)
+	fs.Debugf(name, "Newfs: Copy buffer size in KB: %v, path: %v", opt.SizeCopyBufferKb, url)
+	fs.Debugf(name, "Newfs: Username %v", opt.User)
 
 	f := &Fs{
 		name: name,
@@ -586,7 +608,7 @@ func (f *Fs) stat(ctx context.Context, remote string) (info os.FileInfo, err err
 	if err != nil {
 		return info, err
 	}
-	fs.Debugf(f, "Stat : %v", info)
+	fs.Debugf(f, "Stat FileInfo: %v", info)
 	err = client.Close()
 	if err != nil {
 		return info, err
@@ -663,7 +685,7 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 	}
 	defer client.Close()
 
-	fs.Debugf(o, "Hash:path= %v", path)
+	fs.Debugf(o, "Hash: path= %v", path)
 
 	var (
 		resp query.Response
@@ -809,17 +831,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
 	fs.Debugf(o, "Using the object SetModTime function with modTime: %v", modTime)
 
-	/*client,path,err :=o.fs.xrdremote(o.path(),ctx)
-	if err != nil{
-		return errors.Wrap(err, "SetModTime")
-	}
-	defer client.Close()*/
-
 	o.modTime = modTime
-	/*	err = os.Chtimes(path, modTime, modTime)
-		if err != nil {
-			return errors.Wrap(err, "SetModTime failed")
-		}*/
 
 	err := o.stat(ctx)
 	if err != nil {
