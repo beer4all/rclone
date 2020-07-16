@@ -107,9 +107,10 @@ type Fs struct {
 	root string  // the path we are working on
 	opt  Options // parsed options
 	//m             configmap.Mapper // config
-	url            string
-	features       *fs.Features // optional features
-	objectHashesMu sync.Mutex   // global lock for Object.hashes
+	url      string
+	features *fs.Features // optional features
+	poolMu   sync.Mutex
+	pool     []*conn // contains the list of xrootd connections
 }
 
 type Object struct {
@@ -122,14 +123,14 @@ type Object struct {
 }
 
 // Open a new connection to the xrootd server.
-func (f *Fs) xrdremote(name string, ctx context.Context) (client *xrootd.Client, path string, err error) {
+func (f *Fs) xrdremote(name string, ctx context.Context) (path string, err error) {
 	url, err := xrdio.Parse(name)
 	if err != nil {
-		return nil, "", fmt.Errorf("could not parse %q: %w", name, err)
+		return "", fmt.Errorf("could not parse %q: %w", name, err)
 	}
 	path = url.Path
-	client, err = xrootd.NewClient(ctx, url.Addr, f.opt.User)
-	return client, path, err
+
+	return path, err
 }
 
 // readCurrentUser finds the current user name or "" if not found
@@ -144,6 +145,84 @@ func readCurrentUser() (userName string) {
 		return userName
 	}
 	return os.Getenv("LOGNAME")
+}
+
+// conn encapsulates an xrootd client
+type conn struct {
+	client      *xrootd.Client
+	err         error
+	free        bool      // Indicates if client is used
+	timeLastUse time.Time // Time elapsed without using the client
+}
+
+// Open a new connection to the Xrootd server.
+func (f *Fs) XrootdConnection(ctx context.Context) (c *conn, err error) {
+	// Rate limit rate of new connections
+	fs.Debugf(f.name, "XrootdConnection: opening of a new xrootd client")
+	c = &conn{
+		err: nil,
+	}
+	c.client, err = xrootd.NewClient(ctx, f.opt.Servername, f.opt.User)
+	if err != nil {
+		return nil, errors.Wrap(err, "XrootdConnection: failure to initialize a new XrootD client ")
+	}
+	c.free = true
+	return c, nil
+}
+
+// First check if a connection is not used.
+// Otherwise no connection is available, it opens a new one and adds it to the list.
+func (f *Fs) getXrootdConnection(ctx context.Context) (c *conn, err error) {
+	f.poolMu.Lock()
+	i := 0
+	for i < len(f.pool) {
+		c = f.pool[i]
+		if c.free {
+			break
+		}
+		i++
+	}
+	f.poolMu.Unlock()
+	if c != nil && c.free {
+		fs.Debugf(f.name, "reuse of an XrootD client already initialized but not used")
+		return c, nil
+	} else {
+		c, err = f.XrootdConnection(ctx)
+		if err != nil {
+			return nil, err
+		}
+		f.poolMu.Lock()
+		f.pool = append(f.pool, c)
+		f.poolMu.Unlock()
+		return c, nil
+	}
+}
+
+// Changes the connection state to free
+func (f *Fs) ConnectionFree(c *conn) {
+	c.free = true
+	c.timeLastUse = time.Now()
+	f.freeConnexion()
+}
+
+//frees connections unused for some time
+func (f *Fs) freeConnexion() {
+	f.poolMu.Lock()
+	i := 0
+	var c *conn
+	for i < len(f.pool) {
+		c = f.pool[i]
+		if c != nil && c.free {
+			//close clients not used for more than 2 seconds
+			if int(time.Since(c.timeLastUse).Seconds()) >= 2 {
+				fs.Debugf(f.name, "Close client")
+				c.client.Close()
+				f.pool[i] = nil
+			}
+		}
+		i++
+	}
+	f.poolMu.Unlock()
 }
 
 // NewFs creates a new Fs object from the name and root. It connects to
@@ -176,11 +255,18 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 		CanHaveEmptyDirectories: true,
 	}).Fill(f)
 
-	client, path, err := f.xrdremote(url, ctx)
+	path, err := f.xrdremote(url, ctx)
 	if err != nil {
 		return nil, errors.Wrap(err, "NewFs")
 	}
-	defer client.Close()
+
+	c, err := f.getXrootdConnection(ctx)
+	if err != nil {
+		fs.Debugf(name, "Newfs: failure to open a new client ", err)
+		return nil, errors.Wrap(err, "failure to open a new client")
+	}
+	c.free = false
+	defer f.ConnectionFree(c)
 
 	if root != "" {
 		// Check to see if the root actually an existing file
@@ -202,10 +288,6 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 		return f, fs.ErrorIsFile
 	}
 
-	err = client.Close()
-	if err != nil {
-		return f, err
-	}
 	return f, nil
 }
 
@@ -307,17 +389,23 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 
 	xrddir := f.url + "/" + dir
 
-	client, path, err := f.xrdremote(xrddir, ctx)
+	path, err := f.xrdremote(xrddir, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("could not stat %q: %w", path, err)
 	}
-	defer client.Close()
 
 	if path == "" {
 		path = "."
 	}
 
-	fsx := client.FS()
+	c, err := f.getXrootdConnection(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "List")
+	}
+	c.free = false
+	defer f.ConnectionFree(c)
+
+	fsx := c.client.FS()
 	fi, err := fsx.Stat(ctx, path)
 
 	if err != nil {
@@ -329,10 +417,6 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 		return entries, err
 	}
 
-	err = client.Close()
-	if err != nil {
-		return entries, err
-	}
 	return entries, nil
 }
 
@@ -341,23 +425,26 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 	fs.Debugf(f, "Using the fs Mkdir function with directory: %s", dir)
 
 	xrddir := f.url + "/" + dir
-	client, path, err := f.xrdremote(xrddir, ctx)
+	path, err := f.xrdremote(xrddir, ctx)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
 
-	err = client.FS().MkdirAll(ctx, path, 755)
+	c, err := f.getXrootdConnection(ctx)
+	if err != nil {
+		return errors.Wrap(err, "mkdir")
+	}
+	c.free = false
+	defer f.ConnectionFree(c)
+
+	err = c.client.FS().MkdirAll(ctx, path, 755)
+
 	if err != nil {
 		fs.Debugf(f, "failed Mkdir: %v", path)
 		return err
 	}
 	fs.Debugf(f, "Mkdir: %v", path)
 
-	err = client.Close()
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -379,22 +466,25 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 	// Remove the directory
 	xrddir := f.url + "/" + dir
 
-	client, path, err := f.xrdremote(xrddir, ctx)
+	path, err := f.xrdremote(xrddir, ctx)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
 
-	err = client.FS().RemoveDir(ctx, path)
+	c, err := f.getXrootdConnection(ctx)
+	if err != nil {
+		return errors.Wrap(err, "Rmdir")
+	}
+	c.free = false
+	defer f.ConnectionFree(c)
+
+	err = c.client.FS().RemoveDir(ctx, path)
+
 	if err != nil {
 		fs.Debugf(f, "Failed Remove directory: %v", path)
 		return err
 	}
 	fs.Debugf(f, "Remove directory: %v", path)
-	err = client.Close()
-	if err != nil {
-		return err
-	}
 
 	return nil
 }
@@ -407,23 +497,26 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 func (f *Fs) Purge(ctx context.Context) error {
 	fs.Debugf(f, "Using the fs Purge function")
 
-	client, path, err := f.xrdremote(f.root, ctx)
+	path, err := f.xrdremote(f.root, ctx)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
 
-	err = client.FS().RemoveAll(ctx, path)
+	c, err := f.getXrootdConnection(ctx)
+	if err != nil {
+		return errors.Wrap(err, "Purge")
+	}
+	c.free = false
+	defer f.ConnectionFree(c)
+
+	err = c.client.FS().RemoveAll(ctx, path)
+
 	if err != nil {
 		fs.Debugf(f, "Failed Remove All: %v", path)
 		return err
 	}
 	fs.Debugf(f, "Remove All: %v", path)
 
-	err = client.Close()
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -443,19 +536,26 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object,
 	xrddst := f.url + "/" + remote
 
 	//Source path
-	client, pathsrc, err := f.xrdremote(srcObj.path(), ctx)
+	pathsrc, err := f.xrdremote(srcObj.path(), ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "Move")
+		return nil, errors.Wrap(err, "Move: source path failure")
 	}
-	client.Close()
-	//Destination path
-	client, pathdst, err := f.xrdremote(xrddst, ctx)
-	if err != nil {
-		return nil, errors.Wrap(err, "Move")
-	}
-	defer client.Close()
 
-	err = client.FS().Rename(ctx, pathsrc, pathdst)
+	//Destination path
+	pathdst, err := f.xrdremote(xrddst, ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "Move: destination path failed")
+	}
+
+	c, err := f.getXrootdConnection(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "Move: failed to open client")
+	}
+	c.free = false
+	defer f.ConnectionFree(c)
+
+	err = c.client.FS().Rename(ctx, pathsrc, pathdst)
+
 	if err != nil {
 		fs.Debugf(f, "failed Move: %v -> %v", pathsrc, pathdst)
 		return nil, errors.Wrap(err, "Move Rename failed")
@@ -467,25 +567,25 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object,
 	}
 	fs.Debugf(f, "Move: %v -> %v", pathsrc, pathdst)
 
-	err = client.Close()
-	if err != nil {
-		return dstObj, err
-	}
-
 	return dstObj, nil
 }
 
 // dirExists returns true,nil if the directory exists, false, nil if
 // it doesn't or false, err
 func (f *Fs) dirExists(ctx context.Context, dir string) (bool, error) {
-	client, path, err := f.xrdremote(dir, ctx)
+	path, err := f.xrdremote(dir, ctx)
 	if err != nil {
 		return false, fmt.Errorf("could not stat %q: %w", path, err)
 	}
-	defer client.Close()
 
-	fsx := client.FS()
-	info, err := fsx.Stat(ctx, path)
+	c, err := f.getXrootdConnection(ctx)
+	if err != nil {
+		return false, errors.Wrap(err, "dirExists: failed to open client")
+	}
+	c.free = false
+	defer f.ConnectionFree(c)
+
+	info, err := c.client.FS().Stat(ctx, path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
@@ -518,11 +618,10 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
 	srcPath := path.Join(srcFs.root, srcRemote)
 	dstPath := f.url + "/" + dstRemote
 
-	client, path, err := f.xrdremote(dstPath, ctx)
+	path, err := f.xrdremote(dstPath, ctx)
 	if err != nil {
-		return errors.Wrap(err, "dirMove not open client")
+		return errors.Wrap(err, "dirMove: can't find the Path")
 	}
-	defer client.Close()
 
 	// Check if destination exists
 	ok, err = f.dirExists(ctx, path)
@@ -530,25 +629,28 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
 		return fs.ErrorDirExists
 	}
 
+	c, err := f.getXrootdConnection(ctx)
+	if err != nil {
+		return errors.Wrap(err, "DirMove")
+	}
+	c.free = false
+	defer f.ConnectionFree(c)
+
 	// Make sure the parent directory exists
-	err = client.FS().MkdirAll(ctx, filepath.Dir(path), 755)
+	err = c.client.FS().MkdirAll(ctx, filepath.Dir(path), 755)
+
 	if err != nil {
 		fs.Debugf(f, "Failed Mkdir: %v", filepath.Dir(path))
 		return errors.Wrap(err, "DirMove mkParentDir dst failed")
 	}
 	fs.Debugf(f, "Mkdir: %v", filepath.Dir(path))
 
-	err = client.FS().Rename(ctx, srcPath, path)
+	err = c.client.FS().Rename(ctx, srcPath, path)
 	if err != nil {
 		fs.Debugf(f, "Failed directory Move: %v -> %v", srcPath, path)
 		return errors.Wrapf(err, "DirMove Rename(%q,%q) failed", srcPath, dstPath)
 	}
 	fs.Debugf(f, "Directory Move: %v->%v", srcPath, path)
-
-	err = client.Close()
-	if err != nil {
-		return err
-	}
 
 	return nil
 }
@@ -597,22 +699,24 @@ func (f *Fs) stat(ctx context.Context, remote string) (info os.FileInfo, err err
 		xrddir = f.url + "/" + remote
 	}
 
-	client, path, err := f.xrdremote(xrddir, ctx)
+	path, err := f.xrdremote(xrddir, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("could not stat %q: %w", path, err)
 	}
-	defer client.Close()
 
-	fsx := client.FS()
-	info, err = fsx.Stat(ctx, path)
+	c, err := f.getXrootdConnection(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "stat: failed to open client")
+	}
+	c.free = false
+	defer f.ConnectionFree(c)
+
+	info, err = c.client.FS().Stat(ctx, path)
+
 	if err != nil {
 		return info, err
 	}
 	fs.Debugf(f, "Stat FileInfo: %v", info)
-	err = client.Close()
-	if err != nil {
-		return info, err
-	}
 
 	return info, nil
 }
@@ -679,11 +783,10 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 	}
 
 	// Retrieve the checksum of the file by asking the xrootd server
-	client, path, err := o.fs.xrdremote(o.path(), ctx)
+	path, err := o.fs.xrdremote(o.path(), ctx)
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
 
 	fs.Debugf(o, "Hash: path= %v", path)
 
@@ -695,8 +798,15 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 		}
 	)
 
+	c, err := o.fs.getXrootdConnection(ctx)
+	if err != nil {
+		return "", errors.Wrap(err, "Hash")
+	}
+	c.free = false
+	defer o.fs.ConnectionFree(c)
+
 	fs.Debugf(o, "send hash request")
-	_, err = client.Send(ctx, &resp, &req)
+	_, err = c.client.Send(ctx, &resp, &req)
 
 	if err != nil {
 		fs.Debugf(o, "Checksum request error", err)
@@ -714,11 +824,6 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 	}
 
 	fs.Debugf(o, "Hash: o.Hash= %v && Data=%v", o.hash, string(resp.Data))
-
-	err = client.Close()
-	if err != nil {
-		return o.hash, err
-	}
 
 	return o.hash, nil
 }
@@ -850,34 +955,39 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	fs.Debugf(o, "Using the object Update function with in: %v", in)
 	o.hash = ""
 
-	client, path, err := o.fs.xrdremote(o.path(), ctx)
+	path, err := o.fs.xrdremote(o.path(), ctx)
 	if err != nil {
-		fs.Debugf(src, "Failed to open client", err)
+		fs.Debugf(src, "Path finding failure", err)
 		return err
 	}
-	defer client.Close()
 
 	var fileExists bool = false
 
+	c, err := o.fs.getXrootdConnection(ctx)
+	if err != nil {
+		return errors.Wrap(err, "Update")
+	}
+	c.free = false
+	defer o.fs.ConnectionFree(c)
 	//see if the file exists
-	info, err := client.FS().Stat(ctx, path)
+	info, err := c.client.FS().Stat(ctx, path)
+
 	if err == nil {
 		if !info.IsDir() {
 			fileExists = true
 		}
 	}
-
 	var file xrdfs.File
 
 	if !fileExists {
-		file, err = client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsNew|xrdfs.OpenOptionsMkPath)
+		file, err = c.client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsNew|xrdfs.OpenOptionsMkPath)
 		if err != nil {
-			fs.Debugf(src, "Failed to open an existing file", err)
+			fs.Debugf(src, "Failed to open a new file", err)
 			return err
 		}
 
 	} else {
-		file, err = client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsMkPath|xrdfs.OpenOptionsDelete)
+		file, err = c.client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsMkPath|xrdfs.OpenOptionsDelete)
 		if err != nil {
 			fs.Debugf(src, "Failed to open an existing file", err)
 			return err
@@ -887,24 +997,27 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 	// remove the file if upload failed
 	remove := func() {
-		client, path, removeErr := o.fs.xrdremote(o.path(), ctx)
+		path, removeErr := o.fs.xrdremote(o.path(), ctx)
 		if removeErr != nil {
-			fs.Debugf(src, "Failed to open client", removeErr)
+			fs.Debugf(src, "failure to find the way : %v", removeErr)
 			return
 		}
-		defer client.Close()
-		removeErr = client.FS().RemoveFile(ctx, path)
 
+		c, err := o.fs.getXrootdConnection(ctx)
+		if err != nil {
+			fs.Debugf(src, "failed to open client to remove : %v", removeErr)
+			return
+		}
+		c.free = false
+		defer o.fs.ConnectionFree(c)
+
+		removeErr = c.client.FS().RemoveFile(ctx, path)
 		if removeErr != nil {
 			fs.Debugf(src, "Failed to remove: %v", removeErr)
 		} else {
 			fs.Debugf(src, "Removed after failed upload: %v", err)
 		}
-		removeErr = client.Close()
-		if removeErr != nil {
-			fs.Debugf(src, "Failed to close client ", removeErr)
-			return
-		}
+		return
 	}
 
 	var bufsize int64 = o.fs.opt.SizeCopyBufferKb * 1024
@@ -959,11 +1072,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		return errors.Wrap(err, "Update: SetModTime failed")
 	}
 
-	err = client.Close()
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -971,23 +1079,25 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 func (o *Object) Remove(ctx context.Context) error {
 	fs.Debugf(o, "Using the object Remove function")
 
-	client, path, err := o.fs.xrdremote(o.path(), ctx)
+	path, err := o.fs.xrdremote(o.path(), ctx)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
 
-	err = client.FS().RemoveFile(ctx, path)
+	c, err := o.fs.getXrootdConnection(ctx)
+	if err != nil {
+		return errors.Wrap(err, "mkdir")
+	}
+	c.free = false
+	defer o.fs.ConnectionFree(c)
+
+	err = c.client.FS().RemoveFile(ctx, path)
 	if err != nil {
 		fs.Debugf(o, "Failed remove File: %v", path)
 		return err
 	}
 	fs.Debugf(o, "Remove File: %v", path)
 
-	err = client.Close()
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
