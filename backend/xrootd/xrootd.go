@@ -149,10 +149,9 @@ func readCurrentUser() (userName string) {
 
 // conn encapsulates an xrootd client
 type conn struct {
-	client      *xrootd.Client
-	err         error
-	free        bool      // Indicates if client is used
-	timeLastUse time.Time // Time elapsed without using the client
+	client *xrootd.Client
+	err    error
+	//timeLastUse  time.Time  // Time elapsed without using the client
 }
 
 // Open a new connection to the Xrootd server.
@@ -166,7 +165,6 @@ func (f *Fs) XrootdConnection(ctx context.Context) (c *conn, err error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "XrootdConnection: failure to initialize a new XrootD client ")
 	}
-	c.free = true
 	return c, nil
 }
 
@@ -174,56 +172,66 @@ func (f *Fs) XrootdConnection(ctx context.Context) (c *conn, err error) {
 // Otherwise no connection is available, it opens a new one and adds it to the list.
 func (f *Fs) getXrootdConnection(ctx context.Context) (c *conn, err error) {
 	f.poolMu.Lock()
-	i := 0
-	for i < len(f.pool) {
-		c = f.pool[i]
-		if c.free {
+	for len(f.pool) > 0 {
+		c = f.pool[0]
+		f.pool = f.pool[1:]
+		if c != nil && c.err == nil {
 			break
+		} else {
+			c.client.Close()
+			c = nil
 		}
-		i++
 	}
 	f.poolMu.Unlock()
-	if c != nil && c.free {
+	if c != nil {
 		fs.Debugf(f.name, "reuse of an XrootD client already initialized but not used")
+		//f.ConnectionNoFree(c)
 		return c, nil
 	} else {
 		c, err = f.XrootdConnection(ctx)
 		if err != nil {
 			return nil, err
 		}
-		f.poolMu.Lock()
-		f.pool = append(f.pool, c)
-		f.poolMu.Unlock()
 		return c, nil
 	}
 }
 
 // Changes the connection state to free
-func (f *Fs) ConnectionFree(c *conn) {
-	c.free = true
-	c.timeLastUse = time.Now()
-	f.freeConnexion()
+func (f *Fs) ConnectionFree(c *conn, err error) {
+	//c.timeLastUse = time.Now()
+	c.err = err
+	if c.err != nil {
+		fs.Debugf(f.name, "Close client err %v", err)
+		c.client.Close()
+	} else {
+		f.poolMu.Lock()
+		fs.Debugf(f.name, "add client to pool")
+		f.pool = append(f.pool, c)
+		f.poolMu.Unlock()
+	}
 }
 
+/*
 //frees connections unused for some time
-func (f *Fs) freeConnexion() {
-	f.poolMu.Lock()
-	i := 0
-	var c *conn
-	for i < len(f.pool) {
-		c = f.pool[i]
-		if c != nil && c.free {
-			//close clients not used for more than 2 seconds
-			if int(time.Since(c.timeLastUse).Seconds()) >= 2 {
-				fs.Debugf(f.name, "Close client")
-				c.client.Close()
-				f.pool[i] = nil
-			}
-		}
-		i++
-	}
-	f.poolMu.Unlock()
+func (f *Fs) freeConnexion(){
+  f.poolMu.Lock()
+  i := 0
+  var c *conn
+  for i < len(f.pool) {
+    c = f.pool[i]
+    if c != nil {
+       //close clients not used for more than 2 seconds
+      if int(time.Since(c.timeLastUse).Seconds()) >= 2 || c.err != nil {
+        fs.Debugf(f.name , "Close client")
+        c.client.Close()
+        f.pool[i] = nil
+      }
+    }
+    i++
+  }
+  f.poolMu.Unlock()
 }
+*/
 
 // NewFs creates a new Fs object from the name and root. It connects to
 // the host specified in the config file.
@@ -259,14 +267,6 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "NewFs")
 	}
-
-	c, err := f.getXrootdConnection(ctx)
-	if err != nil {
-		fs.Debugf(name, "Newfs: failure to open a new client ", err)
-		return nil, errors.Wrap(err, "failure to open a new client")
-	}
-	c.free = false
-	defer f.ConnectionFree(c)
 
 	if root != "" {
 		// Check to see if the root actually an existing file
@@ -398,17 +398,16 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 		path = "."
 	}
 
-	c, err := f.getXrootdConnection(ctx)
-	if err != nil {
-		return nil, errors.Wrap(err, "List")
+	c, errClient := f.getXrootdConnection(ctx)
+	if errClient != nil {
+		return nil, errors.Wrap(errClient, "List")
 	}
-	c.free = false
-	defer f.ConnectionFree(c)
+	defer f.ConnectionFree(c, errClient)
 
 	fsx := c.client.FS()
-	fi, err := fsx.Stat(ctx, path)
+	fi, errClient := fsx.Stat(ctx, path)
 
-	if err != nil {
+	if errClient != nil {
 		fs.Debugf(f, "List :dir not found with path= %v ", path)
 		return nil, fs.ErrorDirNotFound
 	}
@@ -430,18 +429,17 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 		return err
 	}
 
-	c, err := f.getXrootdConnection(ctx)
+	c, errClient := f.getXrootdConnection(ctx)
 	if err != nil {
 		return errors.Wrap(err, "mkdir")
 	}
-	c.free = false
-	defer f.ConnectionFree(c)
+	defer f.ConnectionFree(c, errClient)
 
-	err = c.client.FS().MkdirAll(ctx, path, 755)
+	errClient = c.client.FS().MkdirAll(ctx, path, 755)
 
-	if err != nil {
+	if errClient != nil {
 		fs.Debugf(f, "failed Mkdir: %v", path)
-		return err
+		return errClient
 	}
 	fs.Debugf(f, "Mkdir: %v", path)
 
@@ -471,18 +469,17 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 		return err
 	}
 
-	c, err := f.getXrootdConnection(ctx)
+	c, errClient := f.getXrootdConnection(ctx)
 	if err != nil {
 		return errors.Wrap(err, "Rmdir")
 	}
-	c.free = false
-	defer f.ConnectionFree(c)
+	defer f.ConnectionFree(c, errClient)
 
-	err = c.client.FS().RemoveDir(ctx, path)
+	errClient = c.client.FS().RemoveDir(ctx, path)
 
-	if err != nil {
+	if errClient != nil {
 		fs.Debugf(f, "Failed Remove directory: %v", path)
-		return err
+		return errClient
 	}
 	fs.Debugf(f, "Remove directory: %v", path)
 
@@ -502,18 +499,17 @@ func (f *Fs) Purge(ctx context.Context) error {
 		return err
 	}
 
-	c, err := f.getXrootdConnection(ctx)
+	c, errClient := f.getXrootdConnection(ctx)
 	if err != nil {
 		return errors.Wrap(err, "Purge")
 	}
-	c.free = false
-	defer f.ConnectionFree(c)
+	defer f.ConnectionFree(c, errClient)
 
-	err = c.client.FS().RemoveAll(ctx, path)
+	errClient = c.client.FS().RemoveAll(ctx, path)
 
-	if err != nil {
+	if errClient != nil {
 		fs.Debugf(f, "Failed Remove All: %v", path)
-		return err
+		return errClient
 	}
 	fs.Debugf(f, "Remove All: %v", path)
 
@@ -547,18 +543,17 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object,
 		return nil, errors.Wrap(err, "Move: destination path failed")
 	}
 
-	c, err := f.getXrootdConnection(ctx)
-	if err != nil {
+	c, errClient := f.getXrootdConnection(ctx)
+	if errClient != nil {
 		return nil, errors.Wrap(err, "Move: failed to open client")
 	}
-	c.free = false
-	defer f.ConnectionFree(c)
+	defer f.ConnectionFree(c, errClient)
 
-	err = c.client.FS().Rename(ctx, pathsrc, pathdst)
+	errClient = c.client.FS().Rename(ctx, pathsrc, pathdst)
 
-	if err != nil {
+	if errClient != nil {
 		fs.Debugf(f, "failed Move: %v -> %v", pathsrc, pathdst)
-		return nil, errors.Wrap(err, "Move Rename failed")
+		return nil, errors.Wrap(errClient, "Move Rename failed")
 	}
 
 	dstObj, err := f.NewObject(ctx, remote)
@@ -578,19 +573,18 @@ func (f *Fs) dirExists(ctx context.Context, dir string) (bool, error) {
 		return false, fmt.Errorf("could not stat %q: %w", path, err)
 	}
 
-	c, err := f.getXrootdConnection(ctx)
-	if err != nil {
-		return false, errors.Wrap(err, "dirExists: failed to open client")
+	c, errClient := f.getXrootdConnection(ctx)
+	if errClient != nil {
+		return false, errors.Wrap(errClient, "dirExists: failed to open client")
 	}
-	c.free = false
-	defer f.ConnectionFree(c)
+	defer f.ConnectionFree(c, errClient)
 
-	info, err := c.client.FS().Stat(ctx, path)
-	if err != nil {
-		if os.IsNotExist(err) {
+	info, errClient := c.client.FS().Stat(ctx, path)
+	if errClient != nil {
+		if os.IsNotExist(errClient) {
 			return false, nil
 		}
-		return false, errors.Wrap(err, "dirExists stat failed")
+		return false, errors.Wrap(errClient, "dirExists stat failed")
 	}
 	if !info.IsDir() {
 		return false, fs.ErrorIsFile
@@ -629,26 +623,25 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
 		return fs.ErrorDirExists
 	}
 
-	c, err := f.getXrootdConnection(ctx)
-	if err != nil {
-		return errors.Wrap(err, "DirMove")
+	c, errClient := f.getXrootdConnection(ctx)
+	if errClient != nil {
+		return errors.Wrap(errClient, "DirMove")
 	}
-	c.free = false
-	defer f.ConnectionFree(c)
+	defer f.ConnectionFree(c, errClient)
 
 	// Make sure the parent directory exists
 	err = c.client.FS().MkdirAll(ctx, filepath.Dir(path), 755)
 
-	if err != nil {
+	if errClient != nil {
 		fs.Debugf(f, "Failed Mkdir: %v", filepath.Dir(path))
-		return errors.Wrap(err, "DirMove mkParentDir dst failed")
+		return errors.Wrap(errClient, "DirMove mkParentDir dst failed")
 	}
 	fs.Debugf(f, "Mkdir: %v", filepath.Dir(path))
 
-	err = c.client.FS().Rename(ctx, srcPath, path)
-	if err != nil {
+	errClient = c.client.FS().Rename(ctx, srcPath, path)
+	if errClient != nil {
 		fs.Debugf(f, "Failed directory Move: %v -> %v", srcPath, path)
-		return errors.Wrapf(err, "DirMove Rename(%q,%q) failed", srcPath, dstPath)
+		return errors.Wrapf(errClient, "DirMove Rename(%q,%q) failed", srcPath, dstPath)
 	}
 	fs.Debugf(f, "Directory Move: %v->%v", srcPath, path)
 
@@ -704,17 +697,16 @@ func (f *Fs) stat(ctx context.Context, remote string) (info os.FileInfo, err err
 		return nil, fmt.Errorf("could not stat %q: %w", path, err)
 	}
 
-	c, err := f.getXrootdConnection(ctx)
-	if err != nil {
-		return nil, errors.Wrap(err, "stat: failed to open client")
+	c, errClient := f.getXrootdConnection(ctx)
+	if errClient != nil {
+		return nil, errors.Wrap(errClient, "stat: failed to open client")
 	}
-	c.free = false
-	defer f.ConnectionFree(c)
+	defer f.ConnectionFree(c, nil)
 
-	info, err = c.client.FS().Stat(ctx, path)
+	info, errClient = c.client.FS().Stat(ctx, path)
 
-	if err != nil {
-		return info, err
+	if errClient != nil {
+		return info, errClient
 	}
 	fs.Debugf(f, "Stat FileInfo: %v", info)
 
@@ -798,19 +790,18 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 		}
 	)
 
-	c, err := o.fs.getXrootdConnection(ctx)
-	if err != nil {
-		return "", errors.Wrap(err, "Hash")
+	c, errClient := o.fs.getXrootdConnection(ctx)
+	if errClient != nil {
+		return "", errors.Wrap(errClient, "Hash")
 	}
-	c.free = false
-	defer o.fs.ConnectionFree(c)
+	defer o.fs.ConnectionFree(c, errClient)
 
 	fs.Debugf(o, "send hash request")
-	_, err = c.client.Send(ctx, &resp, &req)
+	_, errClient = c.client.Send(ctx, &resp, &req)
 
-	if err != nil {
-		fs.Debugf(o, "Checksum request error", err)
-		return "", err
+	if errClient != nil {
+		fs.Debugf(o, "Checksum request error", errClient)
+		return "", errClient
 	}
 
 	stringdata := (strings.Split(string(resp.Data), " "))
@@ -963,12 +954,11 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 	var fileExists bool = false
 
-	c, err := o.fs.getXrootdConnection(ctx)
-	if err != nil {
-		return errors.Wrap(err, "Update")
+	c, errClient := o.fs.getXrootdConnection(ctx)
+	if errClient != nil {
+		return errors.Wrap(errClient, "Update")
 	}
-	c.free = false
-	defer o.fs.ConnectionFree(c)
+	defer o.fs.ConnectionFree(c, errClient)
 	//see if the file exists
 	info, err := c.client.FS().Stat(ctx, path)
 
@@ -980,17 +970,17 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	var file xrdfs.File
 
 	if !fileExists {
-		file, err = c.client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsNew|xrdfs.OpenOptionsMkPath)
-		if err != nil {
-			fs.Debugf(src, "Failed to open a new file", err)
-			return err
+		file, errClient = c.client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsNew|xrdfs.OpenOptionsMkPath)
+		if errClient != nil {
+			fs.Debugf(src, "Failed to open a new file", errClient)
+			return errClient
 		}
 
 	} else {
-		file, err = c.client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsMkPath|xrdfs.OpenOptionsDelete)
-		if err != nil {
-			fs.Debugf(src, "Failed to open an existing file", err)
-			return err
+		file, errClient = c.client.FS().Open(ctx, path, 0755, xrdfs.OpenOptionsMkPath|xrdfs.OpenOptionsDelete)
+		if errClient != nil {
+			fs.Debugf(src, "Failed to open an existing file", errClient)
+			return errClient
 		}
 	}
 	defer file.Close(ctx)
@@ -1003,19 +993,18 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 			return
 		}
 
-		c, err := o.fs.getXrootdConnection(ctx)
-		if err != nil {
-			fs.Debugf(src, "failed to open client to remove : %v", removeErr)
+		c, errClient := o.fs.getXrootdConnection(ctx)
+		if errClient != nil {
+			fs.Debugf(src, "failed to open client to remove : %v", errClient)
 			return
 		}
-		c.free = false
-		defer o.fs.ConnectionFree(c)
+		defer o.fs.ConnectionFree(c, errClient)
 
-		removeErr = c.client.FS().RemoveFile(ctx, path)
-		if removeErr != nil {
-			fs.Debugf(src, "Failed to remove: %v", removeErr)
+		errClient = c.client.FS().RemoveFile(ctx, path)
+		if errClient != nil {
+			fs.Debugf(src, "Failed to remove: %v", errClient)
 		} else {
-			fs.Debugf(src, "Removed after failed upload: %v", err)
+			fs.Debugf(src, "Removed after failed upload: %v", errClient)
 		}
 		return
 	}
@@ -1031,7 +1020,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	for {
 		n, err_read = in.Read(data)
 		if (err_read != nil) && (err_read != io.EOF) {
-			err = err_read
+			errClient = err_read
 			fs.Debugf(src, "update: could not read data: error: %v", err_read)
 			break
 		}
@@ -1039,7 +1028,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		_, err_write = file.WriteAt(data[:n], index)
 
 		if err_write != nil {
-			err = err_write
+			errClient = err_write
 			fs.Debugf(src, "update: could not copy to output file: error: %v", err_write)
 			break
 		}
@@ -1053,9 +1042,9 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		}
 	}
 
-	if err != nil {
+	if errClient != nil {
 		remove()
-		return err
+		return errClient
 	}
 
 	fs.Debugf(src, "Update: avg buff size= %d", index/turn)
@@ -1084,17 +1073,16 @@ func (o *Object) Remove(ctx context.Context) error {
 		return err
 	}
 
-	c, err := o.fs.getXrootdConnection(ctx)
-	if err != nil {
-		return errors.Wrap(err, "mkdir")
+	c, errClient := o.fs.getXrootdConnection(ctx)
+	if errClient != nil {
+		return errors.Wrap(errClient, "mkdir")
 	}
-	c.free = false
-	defer o.fs.ConnectionFree(c)
+	defer o.fs.ConnectionFree(c, errClient)
 
-	err = c.client.FS().RemoveFile(ctx, path)
-	if err != nil {
+	errClient = c.client.FS().RemoveFile(ctx, path)
+	if errClient != nil {
 		fs.Debugf(o, "Failed remove File: %v", path)
-		return err
+		return errClient
 	}
 	fs.Debugf(o, "Remove File: %v", path)
 
