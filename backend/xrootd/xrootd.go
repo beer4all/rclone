@@ -720,10 +720,6 @@ func (o *Object) stat(ctx context.Context) error {
 
 	if err != nil {
 
-		//if os.IsNotExist(err) {
-		//return fs.ErrorObjectNotFound
-		//}
-		//return errors.Wrap(err, "stat failed")
 		return fs.ErrorObjectNotFound
 	}
 	if info.IsDir() {
@@ -829,51 +825,57 @@ func (o *Object) path() string {
 
 // object that is read
 type xrdOpenFile struct {
-	o       *Object     // object that is open
-	xrdfile *xrdio.File // file object reference
+	o       *Object    // object that is open
+	xrdfile xrdfs.File // file object reference
 	bytes   int64
 	eof     bool
+	ctx     context.Context
+	c       *conn
 }
 
-func newObjectReader(o *Object, xrdfile *xrdio.File) *xrdOpenFile {
+// Initialize the read object
+func newObjectReader(o *Object, xrdfile xrdfs.File, ctx context.Context, c *conn) *xrdOpenFile {
 	fs.Debugf(xrdfile, "Using newObjectReader function")
 	file := &xrdOpenFile{
 		o:       o,
 		xrdfile: xrdfile,
 		bytes:   0,
-		eof:     false,
+		ctx:     ctx,
+		c:       c,
 	}
 	return file
 }
 
-// Read bytes from the object - see io.Reader
+// Read the bytes of the read object
 func (file *xrdOpenFile) Read(p []byte) (n int, err error) {
 	//fs.Debugf(file, "Using Read function %v", file.o)
-	n, err = file.xrdfile.Read(p)
+	n, err = file.xrdfile.ReadAt(p, file.bytes)
 	file.bytes += int64(n)
 	if err != nil {
 		if err == io.EOF {
-			file.eof = true
+			fs.Debugf(file, "end of file reached : %v", err)
 		} else {
 			fs.Debugf(file, "err during read : %v", err)
 			return n, err
 		}
 	}
+
+	if file.o.Size() == file.bytes {
+		//The ReadAt function does not return io.EOF
+		err = io.EOF
+		return n, err
+	}
 	return n, err
 }
 
-// Close the object
+// Close the read object
 func (file *xrdOpenFile) Close() (err error) {
 	fs.Debugf(file, "Using Close function")
 
-	if file.eof {
-		fs.Debugf(file, "end of file reached")
-	} else {
-		fs.Debugf(file, "end of file isn't reached")
-	}
-	err = file.xrdfile.Close()
-	if err != nil {
-		return err
+	errClient := file.xrdfile.Close(file.ctx)
+	defer file.o.fs.ConnectionFree(file.c, errClient)
+	if errClient != nil {
+		return errClient
 	}
 
 	//Check to see we read the correct number of bytes
@@ -887,14 +889,16 @@ func (file *xrdOpenFile) Close() (err error) {
 // Open an object for read
 func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
 	fs.Debugf(o, "Using the object Open function")
-	var offset, limit int64 = 0, -1
+
+	var limit int64 = -1
+	//var offset int64 = 0
 
 	for _, option := range options {
 		switch x := option.(type) {
-		case *fs.SeekOption:
-			offset = x.Offset
+		//	case *fs.SeekOption:
+		//		offset = x.Offset
 		case *fs.RangeOption:
-			offset, limit = x.Decode(o.Size())
+			/*offset,*/ _, limit = x.Decode(o.Size())
 		default:
 			if option.Mandatory() {
 				fs.Logf(o, "Unsupported mandatory option: %v", option)
@@ -902,22 +906,39 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 		}
 	}
 
-	xrdfile, err := xrdio.Open(o.path())
+	path, err := o.fs.xrdremote(o.path(), ctx)
 	if err != nil {
-		fs.Debugf(o, "failed Open file: %v", o.path())
-		return nil, errors.Wrap(err, "Open failed")
+		return nil, err
 	}
-	fs.Debugf(o, "Open file: %v", o.path())
 
-	if offset > 0 {
-		off, err := xrdfile.Seek(offset, io.SeekStart)
-		if err != nil || off != offset {
-			xrdfile.Close()
-			return nil, errors.Wrap(err, "Open Seek failed")
+	c, errClient := o.fs.getXrootdConnection(ctx)
+	if err != nil {
+		o.fs.ConnectionFree(c, errClient)
+		return nil, errors.Wrap(err, "Open")
+	}
+
+	xrdfile, errClient := c.client.FS().Open(ctx, path, xrdfs.OpenModeOwnerRead, xrdfs.OpenOptionsOpenRead)
+
+	if errClient != nil {
+		fs.Debugf(o, "Open: Failed to open file: %v", o.path())
+		o.fs.ConnectionFree(c, errClient)
+		return nil, errors.Wrap(err, "Failed to open file")
+	}
+	fs.Debugf(o, "Open: Open the file for reading: %v", o.path())
+
+	/*
+		//seek is not implemented in xrdfs.file, it would have to go through xrdio to use it
+		//but in our case opening a file with xrdio creates many time_wait
+		if offset > 0 {
+			off, err := xrdfile.Seek(offset, io.SeekStart)
+			if err != nil || off != offset {
+				xrdfile.Close(ctx)
+				return nil, errors.Wrap(err, "Open Seek failed")
+			}
 		}
-	}
+	*/
 
-	in = readers.NewLimitedReadCloser(newObjectReader(o, xrdfile), limit)
+	in = readers.NewLimitedReadCloser(newObjectReader(o, xrdfile, ctx, c), limit)
 	return in, nil
 }
 
@@ -1081,7 +1102,7 @@ func (o *Object) Remove(ctx context.Context) error {
 
 	errClient = c.client.FS().RemoveFile(ctx, path)
 	if errClient != nil {
-		fs.Debugf(o, "Failed remove File: %v", path)
+		fs.Debugf(o, "Failed open File: %v", path)
 		return errClient
 	}
 	fs.Debugf(o, "Remove File: %v", path)
