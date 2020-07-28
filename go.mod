@@ -55,6 +55,7 @@ require (
 	github.com/xanzy/ssh-agent v0.2.1
 	github.com/youmark/pkcs8 v0.0.0-20191102193632-94c173a94d60
 	github.com/yunify/qingstor-sdk-go/v3 v3.2.0
+	go-hep.org/x/hep v0.27.0
 	go.etcd.io/bbolt v1.3.3
 	goftp.io/server v0.3.2
 	golang.org/x/crypto v0.0.0-20200221231518-2aa609cf4a9d
