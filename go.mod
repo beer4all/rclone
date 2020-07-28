@@ -55,14 +55,15 @@ require (
 	github.com/xanzy/ssh-agent v0.2.1
 	github.com/youmark/pkcs8 v0.0.0-20191102193632-94c173a94d60
 	github.com/yunify/qingstor-sdk-go/v3 v3.2.0
-	go-hep.org/x/hep v0.27.0
+	go-hep.org/x/exp v0.5.0 // indirect
+	go-hep.org/x/hep v0.27.1-0.20200709150348-f4c3901f6482
 	go.etcd.io/bbolt v1.3.3
 	goftp.io/server v0.3.2
-	golang.org/x/crypto v0.0.0-20200221231518-2aa609cf4a9d
+	golang.org/x/crypto v0.0.0-20200604202706-70a84ac30bf9
 	golang.org/x/net v0.0.0-20200226121028-0de0cce0169b
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
-	golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e
-	golang.org/x/sys v0.0.0-20200323222414-85ca7c5b95cd
+	golang.org/x/sync v0.0.0-20200317015054-43a5402ce75a
+	golang.org/x/sys v0.0.0-20200622214017-ed371f2e16b4
 	golang.org/x/text v0.3.2
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	google.golang.org/api v0.21.1-0.20200411000818-c8cf5cff125e
