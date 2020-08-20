@@ -387,7 +387,12 @@ func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, inf
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
 	fs.Debugf(f, "Using the fs list function with directory: %s", dir)
 
-	xrddir := f.url + "/" + dir
+	var xrddir string
+	if dir != "" {
+		xrddir = f.root + "/" + dir
+	} else {
+		xrddir = f.root
+	}
 
 	path, err := f.xrdremote(xrddir, ctx)
 	if err != nil {
@@ -650,7 +655,7 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
 
 // Precision of the file system
 func (f *Fs) Precision() time.Duration {
-	return time.Second
+	return fs.ModTimeNotSupported
 }
 
 // Put data from <in> into a new remote xrootd file object described by <src.Remote()> and <src.ModTime(ctx)>
