@@ -198,7 +198,6 @@ func (f *Fs) getXrootdConnection(ctx context.Context) (c *conn, err error) {
 
 // Changes the connection state to free
 func (f *Fs) ConnectionFree(c *conn, err error) {
-	//c.timeLastUse = time.Now()
 	c.err = err
 	if c.err != nil {
 		fs.Debugf(f.name, "Close client err %v", err)
@@ -245,8 +244,12 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	url := "root://" + opt.Servername + ":" + opt.Port + "/" + opt.Path_to_file + "/" + root
+	var url string
+	if opt.Path_to_file != root[0:len(opt.Path_to_file)] {
+		url = "root://" + opt.Servername + ":" + opt.Port + "/" + opt.Path_to_file + "/" + root
+	} else {
+		url = "root://" + opt.Servername + ":" + opt.Port + "/" + root
+	}
 
 	fs.Debugf(name, "Newfs: Copy buffer size in KB: %v, path: %v", opt.SizeCopyBufferKb, url)
 	fs.Debugf(name, "Newfs: Username %v", opt.User)
@@ -346,17 +349,25 @@ func (o *Object) setMetadata(info os.FileInfo) {
 }
 
 //Continuation of the List function
-func (f *Fs) display(ctx context.Context, fsx xrdfs.FileSystem, root string, info os.FileInfo, dir string) (entries fs.DirEntries, err error) {
-	fs.Debugf(f, "Using the fs display function with xrdfs.FileSystem: %v, root: %v ,info: %v and dir= %v", fsx, root, info, dir)
+func (f *Fs) display(ctx context.Context, root string, info os.FileInfo, dir string) (entries fs.DirEntries, err error) {
+	fs.Debugf(f, "Using the fs display function with xrdfs.FileSystem:, root: %v ,info: %v and dir= %v", root, info, dir)
 
 	dirt := path.Join(root, info.Name())
-	ents, err := fsx.Dirlist(ctx, dirt)
 
-	if err != nil {
-		return nil, fmt.Errorf("could not list dir %q: %w", dirt, err)
+	c, errClient := f.getXrootdConnection(ctx)
+	if errClient != nil {
+		return nil, errors.Wrap(errClient, "List")
+	}
+	defer f.ConnectionFree(c, errClient)
+
+	ents, errClient := c.client.FS().Dirlist(ctx, dirt)
+
+	if errClient != nil {
+		return nil, fmt.Errorf("could not list dir %q: %w", dirt, errClient)
 	}
 
 	for _, info := range ents {
+
 		remote := path.Join(dir, info.Name())
 		if info.IsDir() {
 			d := fs.NewDir(remote, info.ModTime())
@@ -409,14 +420,25 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 	}
 	defer f.ConnectionFree(c, errClient)
 
-	fsx := c.client.FS()
-	fi, errClient := fsx.Stat(ctx, path)
+	//fsx := c.client.FS()
+	fi, errClient := c.client.FS().Stat(ctx, path)
 
 	if errClient != nil {
 		fs.Debugf(f, "List :dir not found with path= %v ", path)
 		return nil, fs.ErrorDirNotFound
 	}
-	entries, err = f.display(ctx, fsx, path, fi, dir)
+
+	/*if !fi.IsDir(){
+		o := &Object{
+			fs:     f,
+			remote: fi.Name(),
+		}
+		o.setMetadata(fi)
+		entries = append(entries, o)
+		return entries,nil
+	}
+	*/
+	entries, err = f.display(ctx, path, fi, dir)
 	if err != nil {
 		return entries, err
 	}
@@ -432,6 +454,11 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 	path, err := f.xrdremote(xrddir, ctx)
 	if err != nil {
 		return err
+	}
+
+	ok, err := f.dirExists(ctx, path)
+	if ok {
+		return nil
 	}
 
 	c, errClient := f.getXrootdConnection(ctx)
@@ -462,6 +489,7 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 	if err != nil {
 		return errors.Wrap(err, "Rmdir")
 	}
+
 	if len(entries) != 0 {
 		return fs.ErrorDirectoryNotEmpty
 	}
@@ -582,14 +610,16 @@ func (f *Fs) dirExists(ctx context.Context, dir string) (bool, error) {
 	if errClient != nil {
 		return false, errors.Wrap(errClient, "dirExists: failed to open client")
 	}
-	defer f.ConnectionFree(c, errClient)
+	defer f.ConnectionFree(c, nil)
 
 	info, errClient := c.client.FS().Stat(ctx, path)
 	if errClient != nil {
-		if os.IsNotExist(errClient) {
+		/*if os.IsNotExist(errClient) {
 			return false, nil
-		}
-		return false, errors.Wrap(errClient, "dirExists stat failed")
+		}*/
+		//return false, errors.Wrap(errClient, "dirExists stat failed")
+
+		return false, nil
 	}
 	if !info.IsDir() {
 		return false, fs.ErrorIsFile
@@ -692,10 +722,7 @@ func (f *Fs) String() string {
 func (f *Fs) stat(ctx context.Context, remote string) (info os.FileInfo, err error) {
 	fs.Debugf(f, "Using the fs stat function with remote: %s ", remote)
 
-	xrddir := f.url
-	if filepath.Base(f.url) != remote {
-		xrddir = f.url + "/" + remote
-	}
+	xrddir := f.root + "/" + remote
 
 	path, err := f.xrdremote(xrddir, ctx)
 	if err != nil {
@@ -707,7 +734,6 @@ func (f *Fs) stat(ctx context.Context, remote string) (info os.FileInfo, err err
 		return nil, errors.Wrap(errClient, "stat: failed to open client")
 	}
 	defer f.ConnectionFree(c, nil)
-
 	info, errClient = c.client.FS().Stat(ctx, path)
 
 	if errClient != nil {
@@ -780,8 +806,6 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
-	fs.Debugf(o, "Hash: path= %v", path)
 
 	var (
 		resp query.Response
