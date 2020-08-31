@@ -76,8 +76,6 @@ func init() {
 			Examples: []fs.OptionExample{{
 				Value: "adler32",
 			}, {
-				/*Value: "md5",
-				}, {*/
 				Value: "none",
 				Help:  "no Checksum",
 			}},
@@ -209,28 +207,6 @@ func (f *Fs) ConnectionFree(c *conn, err error) {
 		f.poolMu.Unlock()
 	}
 }
-
-/*
-//frees connections unused for some time
-func (f *Fs) freeConnexion(){
-  f.poolMu.Lock()
-  i := 0
-  var c *conn
-  for i < len(f.pool) {
-    c = f.pool[i]
-    if c != nil {
-       //close clients not used for more than 2 seconds
-      if int(time.Since(c.timeLastUse).Seconds()) >= 2 || c.err != nil {
-        fs.Debugf(f.name , "Close client")
-        c.client.Close()
-        f.pool[i] = nil
-      }
-    }
-    i++
-  }
-  f.poolMu.Unlock()
-}
-*/
 
 // NewFs creates a new Fs object from the name and root. It connects to
 // the host specified in the config file.
@@ -428,16 +404,6 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 		return nil, fs.ErrorDirNotFound
 	}
 
-	/*if !fi.IsDir(){
-		o := &Object{
-			fs:     f,
-			remote: fi.Name(),
-		}
-		o.setMetadata(fi)
-		entries = append(entries, o)
-		return entries,nil
-	}
-	*/
 	entries, err = f.display(ctx, path, fi, dir)
 	if err != nil {
 		return entries, err
@@ -793,7 +759,7 @@ func (o *Object) Fs() fs.Info {
 func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 	fs.Debugf(o, "Using hash function with hash.Type= %v", t)
 
-	if o.fs.opt.HashChosen == "none" {
+	if o.fs.opt.HashChosen != "adler32" {
 		return "", nil
 	}
 
