@@ -35,23 +35,39 @@ XX / xrootd-client
 Storage> xrootd
 ** See help for xrootd backend at: https://rclone.org/xrootd/ **
 
-xrootd host to connect to (probably 'root' )
-Enter a string value. Press Enter for the default ("").
-path_xroot> root
-xrootd username (default 'localhost')
-Enter a string value. Press Enter for the default ("").
-user> Xrootd port, leave blank to use default (1094)
-Enter a string value. Press Enter for the default ("").
-port>Xrootd root path, example (/tmp) and default '/'
-Enter a string value. Press Enter for the default ("").
+xrootd servername, leave blank to use default
+Enter a string value. Press Enter for the default ("localhost").
+servername> 
+Xrootd port, leave blank to use default
+Enter a string value. Press Enter for the default ("1094").
+port>
+Xrootd root path, example (/tmp)
+Enter a string value. Press Enter for the default ("/").
 path_to_file> /tmp
+username
+Enter a string value. Press Enter for the default ("userxroot").
+user>
+Choice of type of checksum:
+Enter a string value. Press Enter for the default ("adler32").
+Choose a number from below, or type in your own value
+ 1 /
+   \ "adler32"
+ 2 / no Checksum
+   \ "none"
+hash_chosen> 2
+Edit advanced config? (y/n)
+y) Yes
+n) No (default)
+y/n> n
 Remote config
 --------------------
 [remote]
 type = xrootd
-path_xroot = root
+servername = localhost
 path_to_file = /tmp
+hash_chosen = none
 --------------------
+
 y) Yes this is OK (default)
 e) Edit this remote
 d) Delete this remote
