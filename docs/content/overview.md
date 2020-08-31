@@ -47,7 +47,7 @@ Here is an overview of the major features of each cloud storage system.
 | SugarSync                    | -           | No      | No               | No              | -         |
 | Tardigrade                   | -           | Yes     | No               | No              | -         |
 | WebDAV                       | MD5, SHA1 ††| Yes ††† | Depends          | No              | -         |
-| XrootD                       | -           | Yes     | No               | No              | R/W       |
+| XrootD                       | alder32     | No      | No               | No              | R/W       |
 | Yandex Disk                  | MD5         | Yes     | No               | No              | R/W       |
 | The local filesystem         | All         | Yes     | Depends          | No              | -         |
 
@@ -349,7 +349,7 @@ operations more efficient.
 | SugarSync                    | Yes   | Yes  | Yes  | Yes     | No      | No    | Yes          | Yes         | No  | Yes |
 | Tardigrade                   | Yes † | No   | No   | No      | No      | Yes   | Yes          | No          | No  | No  |
 | WebDAV                       | Yes   | Yes  | Yes  | Yes     | No      | No    | Yes ‡        | No [#2178](https://github.com/rclone/rclone/issues/2178) | Yes  | Yes |
-| XrootD                       | No    | Yes  | Yes  | Yes     | No      | No    | No           | No          | No  | Yes |
+| XrootD                       | Yes   | No   | Yes  | Yes     | No      | No    | No           | No          | No  | Yes |
 | Yandex Disk                  | Yes   | Yes  | Yes  | Yes     | Yes     | No    | Yes          | Yes         | Yes | Yes |
 | The local filesystem         | Yes   | No   | Yes  | Yes     | No      | No    | Yes          | No          | Yes | Yes |
 
